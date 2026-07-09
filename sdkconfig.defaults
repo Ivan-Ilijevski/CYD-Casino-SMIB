@@ -1,0 +1,10 @@
+# SMIB deltas from IDF defaults (reproducible config seed).
+# UART0 carries the mux link to the slot machine — no console on it.
+CONFIG_ESP_CONSOLE_NONE=y
+# The main task renders LVGL and builds cJSON messages; the 3.5 KB default
+# overflows during the first screen render (boot-loop with display snow).
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
+# 1 ms tick: 5 ms app loop, 100 ms SAS poll cycle, sub-second protocol timeouts.
+CONFIG_FREERTOS_HZ=1000
+# Big ASCII digits for the balance display (Cyrillic text uses Sf_Compact_14).
+CONFIG_LV_FONT_MONTSERRAT_28=y

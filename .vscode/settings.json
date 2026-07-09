@@ -1,0 +1,30 @@
+{
+  "C_Cpp.intelliSenseEngine": "default",
+  "idf.openOcdConfigs": [
+    "board/esp32-wrover-kit-3.3v.cfg"
+  ],
+  "idf.port": "/dev/tty.wchusbserial210",
+  "idf.currentSetup": "/Users/ivanilijevski/.espressif/v5.5.2/esp-idf",
+  "idf.espIdfPath": "/Users/ivanilijevski/.espressif/v5.5.2/esp-idf",
+  "idf.toolsPath": "/Users/ivanilijevski/.espressif/tools",
+  "idf.pythonInstallPath": "/Users/ivanilijevski/.espressif/tools/python/v5.5.2/venv/bin/python",
+  "idf.customExtraVars": {
+    "IDF_TARGET": "esp32",
+    "IDF_PATH": "/Users/ivanilijevski/.espressif/v5.5.2/esp-idf",
+    "IDF_TOOLS_PATH": "/Users/ivanilijevski/.espressif/tools"
+  },
+  "idf.flashType": "UART",
+  "cmake.configureOnOpen": false,
+  "cmake.configureEnvironment": {
+    "IDF_PATH": "/Users/ivanilijevski/.espressif/v5.5.2/esp-idf",
+    "IDF_TOOLS_PATH": "/Users/ivanilijevski/.espressif/tools"
+  },
+  "cmake.generator": "Ninja",
+  "cmake.buildDirectory": "${workspaceFolder}/build",
+  "clangd.path": "/Users/ivanilijevski/.espressif/tools/esp-clang/esp-19.1.2_20250312/esp-clang/bin/clangd",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=**",
+    "--compile-commands-dir=/Users/ivanilijevski/esp/cms-auth-terminal/cyd_test/build"
+  ]
+}
