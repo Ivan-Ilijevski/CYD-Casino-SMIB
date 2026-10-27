@@ -15,17 +15,24 @@ Usage:
         [--drop-credit]            swallow first cashout credit -> retry path
         [--no-cms]                 CMS silent (offline badge test)
         [--sas-verbose]            print every SAS exchange
+
+Type these at the prompt to play the bar staff and drive the order ring:
+    orders                 list the open orders
+    order accept <n> <min> accept order <n>, promising <min> minutes
+    order ready <n>        mark it poured
+    order cancel <n>       cancel and refund it
 """
 import argparse
 import json
 import sys
+import threading
 import time
 
 import serial
 
 from mux import CH_CMS, CH_LOG, CH_SAS, MuxParser, frame
 from sas_egm import FakeEgm
-from cms_server import FakeCms
+from cms_server import FakeCms, console_loop
 
 
 def parse_args():
@@ -72,10 +79,24 @@ def main():
     print(f"[SIM] listening on {args.port} @ {args.baud} "
           f"(CMS {'OFF' if args.no_cms else 'on'}, AFT status {args.aft_status:#04x})")
 
+    if not args.no_cms:
+        threading.Thread(target=console_loop, args=(cms,), daemon=True).start()
+
     stats = {"sas": 0, "cms": 0, "log": 0}
+
+    def write_cms(msg):
+        if msg.get("t") != "pong":
+            print(f"[CMS>] {json.dumps(msg, ensure_ascii=False)}")
+        ser.write(frame(CH_CMS, json.dumps(msg, ensure_ascii=False).encode()))
+
     try:
         while True:
             data = ser.read(4096)
+            # Unsolicited frames (order_push from the bar commands above) are
+            # drained every pass, including the idle ones -- the read times out
+            # after 50 ms, so this is the loop's natural tick.
+            for push in cms.drain_pushes():
+                write_cms(push)
             if not data:
                 continue
             for chan, payload in parser.feed(data):
@@ -103,10 +124,7 @@ def main():
                     if msg.get("t") not in ("ping", "hello"):
                         print(f"[CMS<] {json.dumps(msg, ensure_ascii=False)}")
                     for reply in cms.handle(msg):
-                        if reply.get("t") != "pong":
-                            print(f"[CMS>] {json.dumps(reply, ensure_ascii=False)}")
-                        ser.write(frame(CH_CMS, json.dumps(reply, ensure_ascii=False)
-                                        .encode()))
+                        write_cms(reply)
     except KeyboardInterrupt:
         print(f"\n[SIM] frames: {stats}  |  EGM credits {egm.credits / 100:.2f}  |  "
               f"card balance {cms.balance / 100:.2f}, points {cms.points}")

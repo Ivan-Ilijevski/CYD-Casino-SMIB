@@ -15,6 +15,16 @@ static lv_obj_t *s_currency_label;  // Cyrillic currency (Sf_Compact_14)
 static uint64_t s_balance_cents;
 static char s_currency[8] = "МКД";
 
+// Order ring badge: hidden unless a drink is on its way. Tapping it opens the
+// full countdown screen. Just the ring and the figure -- no "мин" caption; the
+// full screen is where the number gets its units.
+static lv_obj_t *s_badge;
+static lv_obj_t *s_badge_arc;
+static lv_obj_t *s_badge_minutes;
+
+#define BADGE_RING  78
+#define BADGE_WIDTH 8
+
 static void order_btn_cb(lv_event_t *e)
 {
     (void)e;
@@ -31,6 +41,12 @@ static void cashout_btn_cb(lv_event_t *e)
 {
     (void)e;
     app_on_ui_cashout();
+}
+
+static void badge_cb(lv_event_t *e)
+{
+    (void)e;
+    app_on_ui_order_status_open();
 }
 
 static lv_obj_t *make_button(lv_obj_t *parent, const char *text, bool primary,
@@ -126,7 +142,75 @@ lv_obj_t *ui_main_create(void)
     make_button(btn_row, "НАРАЧАЈ", true, order_btn_cb, 165, 64);
     make_button(btn_row, "ПРЕФРЛИ", false, transfer_btn_cb, 165, 64);
 
+    // Order ring badge, right-middle: the only free space on this screen, and
+    // created after the logo so it draws above the logo's transparent corner.
+    // The whole badge is the touch target; the arc inside it is not clickable,
+    // so a tap anywhere on it reaches this container.
+    // The container is the touch target; the ring inside it is not clickable,
+    // so a tap anywhere on the badge reaches this.
+    s_badge = lv_obj_create(scr);
+    lv_obj_remove_style_all(s_badge);
+    lv_obj_set_size(s_badge, BADGE_RING, BADGE_RING);
+    lv_obj_align(s_badge, LV_ALIGN_RIGHT_MID, -14, -8);
+    lv_obj_remove_flag(s_badge, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_badge, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_badge, badge_cb, LV_EVENT_CLICKED, NULL);
+
+    s_badge_arc = lv_arc_create(s_badge);
+    lv_obj_set_size(s_badge_arc, BADGE_RING, BADGE_RING);
+    lv_arc_set_bg_angles(s_badge_arc, 0, 360);
+    lv_arc_set_rotation(s_badge_arc, 270);
+    lv_arc_set_range(s_badge_arc, 0, UI_ARC_SPAN);
+    lv_arc_set_value(s_badge_arc, 0);
+    lv_obj_set_style_arc_width(s_badge_arc, BADGE_WIDTH, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_badge_arc, BADGE_WIDTH, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_badge_arc, UI_COL_PANEL, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(s_badge_arc, UI_COL_ACCENT, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(s_badge_arc, true, LV_PART_INDICATOR);
+    lv_obj_remove_flag(s_badge_arc, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_opa(s_badge_arc, LV_OPA_TRANSP, LV_PART_KNOB);
+
+    // A child of the arc, so it stays in the middle of the ring wherever the
+    // layout ends up putting the ring.
+    s_badge_minutes = lv_label_create(s_badge_arc);
+    lv_obj_set_style_text_font(s_badge_minutes, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(s_badge_minutes, UI_COL_TEXT, 0);
+    lv_label_set_text(s_badge_minutes, "");
+    lv_obj_center(s_badge_minutes);
+
     return scr;
+}
+
+void ui_main_set_order_badge(const cms_order_state_t *o)
+{
+    if (!s_badge) {
+        return;
+    }
+    if (!o) {
+        lv_obj_add_flag(s_badge, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    lv_obj_remove_flag(s_badge, LV_OBJ_FLAG_HIDDEN);
+    lv_arc_set_value(s_badge_arc, ui_order_arc_value(o));
+    lv_obj_set_style_arc_color(s_badge_arc, ui_order_color(o), LV_PART_INDICATOR);
+
+    char buf[16];
+    if (ui_order_eta_text(o, buf, sizeof(buf))) {
+        // A range like "10-15" is wider than this small ring's interior at 28 px,
+        // so anything past four characters steps down to the smaller face rather
+        // than spilling over the arc.
+        lv_obj_set_style_text_font(s_badge_minutes,
+                                   strlen(buf) > 4 ? &Sf_Compact_14 : &lv_font_montserrat_28,
+                                   0);
+        lv_label_set_text(s_badge_minutes, buf);
+    } else {
+        // Back to Montserrat: Sf_Compact_14 carries no LV_SYMBOL glyphs, so a
+        // symbol left on the smaller face would draw as a tofu box.
+        lv_obj_set_style_text_font(s_badge_minutes, &lv_font_montserrat_28, 0);
+        lv_label_set_text(s_badge_minutes,
+                          o->status == CMS_ORDER_FULFILLED ? LV_SYMBOL_OK : LV_SYMBOL_BELL);
+    }
 }
 
 void ui_main_set_balance(uint64_t cents, int32_t points)

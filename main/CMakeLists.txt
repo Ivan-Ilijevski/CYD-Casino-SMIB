@@ -11,6 +11,7 @@ set(srcs "smib_main.c"
          "ui/ui_main.c"
          "ui/ui_transfer.c"
          "ui/ui_order.c"
+         "ui/ui_order_status.c"
          "assets/Sf_Compact_14.c"
          "assets/royal_club_zelenezburg_logo.c"
          "assets/royal_club_zelenezburg_logo_transparent.c")

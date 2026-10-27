@@ -6,6 +6,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "cms/cms_types.h"
+
 // --- CMS events (POD copies of parsed JSON; no cJSON crosses tasks) ---
 
 typedef enum {
@@ -18,6 +20,8 @@ typedef enum {
     CMS_EVT_CREDIT_RES,     // cashout deposit (machine credits -> card)
     CMS_EVT_MENU_RES,       // menu itself is cached in the cms module
     CMS_EVT_ORDER_RES,
+    CMS_EVT_ORDER_PUSH,     // unsolicited: one order's status/ETA changed
+    CMS_EVT_ORDERS_RES,     // resync header; `orders_n` pushes follow it
     CMS_EVT_BALANCE_PUSH,
     CMS_EVT_LOGOUT_PUSH,
 } cms_evt_type_t;
@@ -35,6 +39,11 @@ typedef struct {
     bool balance_valid;
     bool points_valid;
     char txn[24];           // debit/commit/rollback correlation
+    // ORDER_RES / ORDER_PUSH. `order_valid` is false when the message carried no
+    // usable order (an order_res failure, or a status string we don't know).
+    cms_order_state_t order;
+    bool order_valid;
+    uint8_t orders_n;       // ORDERS_RES: how many order_push frames follow
 } cms_event_t;
 
 // --- SAS events ---

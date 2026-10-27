@@ -118,14 +118,30 @@ void ui_order_open(const cms_menu_t *menu)
 
     for (int i = 0; i < s_menu.count; i++) {
         const cms_menu_item_t *it = &s_menu.items[i];
-        char price[32], txt[96];
+        // txt holds name + '\n' + detail, so it must fit both in full or the
+        // compiler rejects the concatenation as possibly truncating.
+        char price[32], detail[64], txt[sizeof(((cms_menu_item_t *)0)->name) + 64 + 2];
         ui_fmt_money(price, sizeof(price), it->price, "");
-        snprintf(txt, sizeof(txt), "%s\n%s", it->name,
-                 it->avail ? price : "нема");
-        if (it->avail && it->points_price > 0) {
-            snprintf(txt, sizeof(txt), "%s\n%s / %ldп", it->name, price,
+        if (!it->avail) {
+            snprintf(detail, sizeof(detail), "нема");
+        } else if (it->points_price > 0) {
+            snprintf(detail, sizeof(detail), "%s / %ldп", price,
                      (long)it->points_price);
+        } else {
+            snprintf(detail, sizeof(detail), "%s", price);
         }
+        // How long an order with this drink has been taking, from the CMS's
+        // cached average, so the wait is visible before anything is picked.
+        // A third line would not fit a 52 px button, so it rides along here.
+        // Parentheses rather than a "·": Sf_Compact_14 only has ASCII plus
+        // Cyrillic, and U+00B7 would come out as a tofu box.
+        if (it->avail && it->avg_s > 0) {
+            int32_t lo = ui_order_minutes(it->avg_s);
+            size_t used = strlen(detail);
+            snprintf(detail + used, sizeof(detail) - used, " (%ld-%ld мин)",
+                     (long)lo, (long)ui_order_minutes_upper(lo));
+        }
+        snprintf(txt, sizeof(txt), "%s\n%s", it->name, detail);
 
         lv_obj_t *btn = make_toggle(grid, txt, 205, 52);
         if (!it->avail) {

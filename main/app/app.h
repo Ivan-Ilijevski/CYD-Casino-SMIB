@@ -21,4 +21,5 @@ void app_tick(void);
 void app_on_ui_transfer_confirm(uint64_t amount_cents);
 void app_on_ui_order_confirm(void); // order details read from the ui_order module
 void app_on_ui_order_open(void);
+void app_on_ui_order_status_open(void); // the main-screen ring badge was tapped
 void app_on_ui_cashout(void);       // machine credits -> card, then logout

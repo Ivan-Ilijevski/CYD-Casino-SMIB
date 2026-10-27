@@ -219,6 +219,15 @@ esp_err_t cms_order(const char *sid, const cms_order_item_t *items, size_t n,
     return request(root, id, CMS_EVT_ORDER_RES, NULL);
 }
 
+esp_err_t cms_orders_req(const char *sid)
+{
+    uint32_t id = s_next_id++;
+    cJSON *d;
+    cJSON *root = make_envelope("orders_req", id, &d);
+    cJSON_AddStringToObject(d, "sid", sid);
+    return request(root, id, CMS_EVT_ORDERS_RES, NULL);
+}
+
 esp_err_t cms_get_menu(cms_menu_t *out)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -291,11 +300,63 @@ static void parse_menu(const cJSON *d)
         json_scopy(it, "name", m->name, sizeof(m->name));
         json_i32(it, "points_price", &m->points_price);
         m->avail = cJSON_IsTrue(cJSON_GetObjectItem(it, "avail"));
+        // Optional: absent for a drink the CMS has never timed.
+        json_i32(it, "avg_s", &m->avg_s);
         menu.count++;
     }
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_menu = menu;
     xSemaphoreGive(s_lock);
+}
+
+// Fills ev->order from an order_res / order_push payload.
+//
+// Returns false when there is no order to speak of, which keeps a failed
+// order_res (no fields at all) and a status string from a newer CMS than this
+// firmware out of the UI, instead of showing a half-parsed order.
+static bool parse_order(cms_event_t *ev, const cJSON *d)
+{
+    static const char *const k_status[] = { "received", "accepted", "fulfilled", "cancelled" };
+
+    char status[16];
+    json_scopy(d, "status", status, sizeof(status));
+    size_t i = 0;
+    for (; i < sizeof(k_status) / sizeof(k_status[0]); i++) {
+        if (strcmp(status, k_status[i]) == 0) {
+            break;
+        }
+    }
+    if (i == sizeof(k_status) / sizeof(k_status[0])) {
+        return false;
+    }
+
+    uint64_t num = 0;
+    if (!json_u64(d, "num", &num)) {
+        return false;
+    }
+
+    cms_order_state_t *o = &ev->order;
+    o->num = (uint32_t)num;
+    o->status = (cms_order_status_t)i;
+    o->eta_s = 0;
+    o->total_s = 0;
+    json_i32(d, "eta_s", &o->eta_s);
+    json_i32(d, "eta_total_s", &o->total_s);
+    if (o->eta_s < 0) {
+        o->eta_s = 0;
+    }
+    // The ring divides by total_s, and a CMS that promised less than it has
+    // already counted down would otherwise push the fraction out of range.
+    if (o->total_s < o->eta_s) {
+        o->total_s = o->eta_s;
+    }
+
+    // Anything that is not the bar's own commitment is our estimate, so an
+    // absent eta_src reads as an estimate rather than as a promise.
+    char src[16];
+    json_scopy(d, "eta_src", src, sizeof(src));
+    o->promised = strcmp(src, "promised") == 0;
+    return true;
 }
 
 typedef struct {
@@ -312,6 +373,8 @@ static const msg_map_t k_msg_map[] = {
     { "credit_res",         CMS_EVT_CREDIT_RES,   false },
     { "menu_res",           CMS_EVT_MENU_RES,     false },
     { "order_res",          CMS_EVT_ORDER_RES,    false },
+    { "orders_res",         CMS_EVT_ORDERS_RES,   false },
+    { "order_push",         CMS_EVT_ORDER_PUSH,   true },
     { "balance_push",       CMS_EVT_BALANCE_PUSH, true },
     { "logout_push",        CMS_EVT_LOGOUT_PUSH,  true },
 };
@@ -379,6 +442,12 @@ static void cms_rx_cb(const uint8_t *payload, uint16_t len, void *ctx)
         }
     } else if (m->type == CMS_EVT_MENU_RES && e.u.cms.ok) {
         parse_menu(d);
+    } else if ((m->type == CMS_EVT_ORDER_RES || m->type == CMS_EVT_ORDER_PUSH) && e.u.cms.ok) {
+        e.u.cms.order_valid = parse_order(&e.u.cms, d);
+    } else if (m->type == CMS_EVT_ORDERS_RES && e.u.cms.ok) {
+        int32_t n = 0;
+        json_i32(d, "n", &n);
+        e.u.cms.orders_n = (uint8_t)(n < 0 ? 0 : (n > 255 ? 255 : n));
     }
 
     cJSON_Delete(root);

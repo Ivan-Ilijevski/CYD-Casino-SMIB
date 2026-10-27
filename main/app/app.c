@@ -24,6 +24,18 @@ static const char *TAG = "app";
 #define APP_CARD_HOLD_US    (1500 * 1000LL)
 #define APP_HOLD_BEEPS      3
 
+// A finished order (poured or cancelled) stays on the ring this long before the
+// screen goes back to the main one, so "Готово" is actually read.
+#define ORDER_DWELL_US      (20 * 1000000LL)
+// A cooking order holds the session open until its promised time, plus this
+// much slack. Deliberately NOT indefinite: if the bar never marks the order
+// fulfilled, the normal idle logout must still fire. Nothing is lost by it --
+// the next card tap resyncs the order back from the CMS.
+#define ORDER_GRACE_US      (5 * 60 * 1000000LL)
+// How often the countdown re-renders. The ring shows whole minutes, but a
+// 1 Hz tick keeps the arc moving smoothly enough and costs one small redraw.
+#define ORDER_UI_PERIOD_US  (1000 * 1000LL)
+
 // Funds-transfer chain: CMS debit (hold) -> SAS AFT -> CMS commit.
 // Cashout chain:        SAS AFT from machine -> CMS credit.
 // Money safety rules:
@@ -56,6 +68,23 @@ static int s_rollback_retries;
 
 static bool s_menu_requested;
 static bool s_order_pending;
+
+// The one order the terminal is tracking, and the clock the ring counts on.
+//
+// There is no persistence anywhere in this firmware, so this is lost on reset;
+// recovery is cms_orders_req() after the next auth, which is also what makes a
+// returning player see their order again.
+typedef struct {
+    bool active;
+    cms_order_state_t st;
+    int64_t zero_us;        // when eta_s reaches 0 (esp_timer_get_time basis)
+    int64_t settled_us;     // when fulfilled/cancelled landed; 0 while cooking
+} order_track_t;
+
+static order_track_t s_order;
+static int64_t s_order_ui_us;
+
+static void order_clear(void);
 
 static int64_t s_last_sas_activity_us;
 static int64_t s_hold_start_us;
@@ -104,8 +133,52 @@ static void end_session(void)
     s_auth_uid[0] = '\0';
     s_menu_requested = false;
     s_order_pending = false;
+    order_clear();
     set_state(ST_IDLE);
     ui_show_idle();
+}
+
+// ---------------------------------------------------------------- order ring
+
+// Hands the tracked order (or its absence) to the UI, recomputing the minutes
+// left from the local clock so the ring ticks between CMS messages.
+static void order_render(void)
+{
+    if (!s_order.active) {
+        ui_order_status_clear();
+        return;
+    }
+    cms_order_state_t view = s_order.st;
+    if (view.status == CMS_ORDER_RECEIVED || view.status == CMS_ORDER_ACCEPTED) {
+        int64_t left_us = s_order.zero_us - esp_timer_get_time();
+        view.eta_s = left_us > 0 ? (int32_t)(left_us / 1000000) : 0;
+    }
+    ui_order_status_set(&view);
+}
+
+static void order_clear(void)
+{
+    memset(&s_order, 0, sizeof(s_order));
+    ui_order_status_clear();
+}
+
+// Takes on an order from order_res or order_push.
+static void order_adopt(const cms_order_state_t *o)
+{
+    // A repeat push for the same order updates it and a newer order supersedes
+    // an older one, but a straggler for an order already replaced is ignored --
+    // otherwise a late push could resurrect a finished order.
+    if (s_order.active && o->num < s_order.st.num) {
+        return;
+    }
+    int64_t now = esp_timer_get_time();
+    bool settled = (o->status == CMS_ORDER_FULFILLED || o->status == CMS_ORDER_CANCELLED);
+
+    s_order.active = true;
+    s_order.st = *o;
+    s_order.zero_us = now + (int64_t)o->eta_s * 1000000;
+    s_order.settled_us = settled ? now : 0;
+    order_render();
 }
 
 // Called when a transfer/cashout chain fully resolves (success or failure).
@@ -188,6 +261,10 @@ static void handle_auth_res(const cms_event_t *ev)
     ui_show_main(&s_player);
     ui_toast("Може да ја тргнете картичката", true);
     audio_play(CUE_AUTH_OK);
+    // Anything still cooking from before this session (or before a reboot)
+    // comes back here. Filtered by card on the CMS side, not by sid -- this sid
+    // is brand new, so a session-scoped query would always come back empty.
+    cms_orders_req(s_player.sid);
 }
 
 // ---------------------------------------------------------------- ordering
@@ -223,7 +300,10 @@ static void handle_menu_res(const cms_event_t *ev)
 
 void app_on_ui_order_confirm(void)
 {
-    if (s_state != ST_AUTHED) {
+    // The same guards app_on_ui_order_open uses, plus s_order_pending: the
+    // modal closing is what used to stop a double-tap sending two order_reqs,
+    // which is not a guarantee worth relying on for something that charges a card.
+    if (s_state != ST_AUTHED || s_xfer != XFER_NONE || s_order_pending) {
         return;
     }
     cms_order_item_t items[CMS_MENU_MAX_ITEMS];
@@ -262,8 +342,48 @@ static void handle_order_res(const cms_event_t *ev)
         s_player.points = ev->points;
     }
     ui_update_balance(s_player.balance, s_player.points);
-    ui_toast("Нарачката е примена", true);
     audio_play(CUE_ORDER_OK);
+
+    // The order_res already carries an estimate built from the CMS's cached
+    // per-drink averages, so the ring starts counting immediately instead of
+    // waiting for the bar to accept.
+    if (ev->order_valid) {
+        order_adopt(&ev->order);
+        ui_show_order_status();
+    } else {
+        // An older CMS that answers without the order fields: keep the
+        // behaviour the terminal has always had rather than showing nothing.
+        ui_toast("Нарачката е примена", true);
+    }
+}
+
+// Status/ETA changed, or a resync is replaying this card's open orders.
+static void handle_order_push(const cms_event_t *ev)
+{
+    if (s_state != ST_AUTHED || !ev->order_valid) {
+        return;
+    }
+    order_adopt(&ev->order);
+}
+
+static void handle_orders_res(const cms_event_t *ev)
+{
+    if (s_state != ST_AUTHED) {
+        return;
+    }
+    // n == 0 is the authoritative "nothing is cooking", and the only thing that
+    // clears a stale order after a reboot. A non-zero count needs no action:
+    // the order_push frames that carry the detail follow in the same burst.
+    if (ev->ok && ev->orders_n == 0) {
+        order_clear();
+    }
+}
+
+void app_on_ui_order_status_open(void)
+{
+    if (s_state == ST_AUTHED && s_order.active) {
+        ui_show_order_status();
+    }
 }
 
 // ---------------------------------------------------------------- transfer
@@ -512,6 +632,12 @@ static void handle_cms_link(bool up)
             ESP_LOGI(TAG, "CMS link back, re-sending credit for %s", s_xfer_txn);
             cms_credit(s_player.sid, s_xfer_amount, s_xfer_txn);
         }
+        // Any order_push sent while the link was down was dropped on the floor
+        // (the CMS pushes to a socket, not to a queue), so re-ask rather than
+        // leave the ring frozen on a stale number.
+        if (s_state == ST_AUTHED && s_player.sid[0]) {
+            cms_orders_req(s_player.sid);
+        }
         return;
     }
     if (s_state == ST_IDLE) {
@@ -554,6 +680,12 @@ static void handle_cms_event(const cms_event_t *ev)
         break;
     case CMS_EVT_ORDER_RES:
         handle_order_res(ev);
+        break;
+    case CMS_EVT_ORDER_PUSH:
+        handle_order_push(ev);
+        break;
+    case CMS_EVT_ORDERS_RES:
+        handle_orders_res(ev);
         break;
     case CMS_EVT_DEBIT_RES:
         handle_debit_res(ev);
@@ -667,10 +799,28 @@ void app_tick(void)
         }
     }
 
+    // Order countdown. The deadline lives here rather than in an lv_timer so
+    // there is exactly one clock behind the ring, and the UI stays a pure
+    // renderer of it.
+    if (s_order.active && now - s_order_ui_us >= ORDER_UI_PERIOD_US) {
+        s_order_ui_us = now;
+        if (s_order.settled_us && now - s_order.settled_us >= ORDER_DWELL_US) {
+            // Poured or cancelled, and read by now.
+            order_clear();
+        } else {
+            order_render();
+        }
+    }
+
     // Walk-away protection: quiet authed session -> logout. Never while a
-    // money chain or a pending menu/order request is in flight.
+    // money chain or a pending menu/order request is in flight, and not while
+    // a drink is still coming -- but a cooking order only defers the logout
+    // until its promised time plus some slack, so an order the bar forgets
+    // cannot pin a session open for the rest of the night.
+    bool order_holds_session =
+        s_order.active && !s_order.settled_us && now < s_order.zero_us + ORDER_GRACE_US;
     if (s_state == ST_AUTHED && s_xfer == XFER_NONE &&
-        !s_menu_requested && !s_order_pending &&
+        !s_menu_requested && !s_order_pending && !order_holds_session &&
         ui_touch_idle_ms() > APP_IDLE_LOGOUT_US / 1000 &&
         now - s_last_sas_activity_us > APP_IDLE_LOGOUT_US) {
         ESP_LOGI(TAG, "inactivity logout (sid %s)", s_player.sid);

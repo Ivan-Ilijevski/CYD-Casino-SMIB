@@ -10,8 +10,19 @@ void ui_init(void);
 
 // Screens
 void ui_show_idle(void);
+// p == NULL keeps the details already on screen (returning from another screen).
 void ui_show_main(const player_info_t *p);
 void ui_update_balance(uint64_t balance_cents, int32_t points);
+
+// Order status: a countdown ring with the minutes left in the middle, plus a
+// compact badge on the main screen so the player can keep playing and still
+// see the drink coming.
+void ui_show_order_status(void);
+// Redraws the ring and the badge. Called about once a second while an order is
+// live; the app owns the clock, this only renders what it is handed.
+void ui_order_status_set(const cms_order_state_t *o);
+// No order any more: hides the badge and leaves the status screen if it is up.
+void ui_order_status_clear(void);
 
 // Milliseconds since the last touch input (LVGL inactivity clock).
 uint32_t ui_touch_idle_ms(void);

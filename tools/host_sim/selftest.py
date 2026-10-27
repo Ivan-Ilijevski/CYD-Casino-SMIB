@@ -151,8 +151,85 @@ def test_cms():
     assert "Кафе" in txt
 
 
+def test_order_status():
+    """The countdown ring's data: an estimate up front, the bar's promise after,
+    and a resync that replays whatever is still open."""
+    cms = FakeCms(balance=100000, points=100)
+    sid = rpc(cms, "auth_req", 1, uid="AA BB")["sid"]
+
+    # The menu carries the cached average per drink, so the terminal can show
+    # a per-item time and the estimate is reproducible from it.
+    items = rpc(cms, "menu_req", 2)["items"]
+    assert all("avg_s" in m for m in items), items
+
+    # Estimate = max of the ordered drinks' averages (parallel pours), not sum.
+    order = rpc(cms, "order_req", 3, sid=sid, pay="cash",
+                items=[{"drink": 1, "qty": 1}, {"drink": 4, "qty": 1}])
+    assert order["ok"] and order["num"] == 1
+    assert order["status"] == "received"
+    assert order["eta_src"] == "est"
+    assert order["eta_s"] == 180 and order["eta_total_s"] == 180, order
+
+    # Accepting promises a time, which outranks the estimate.
+    assert "accepted" in cms.bar_accept(1, 12)
+    pushes = cms.drain_pushes()
+    assert len(pushes) == 1 and pushes[0]["t"] == "order_push"
+    d = pushes[0]["d"]
+    assert d["ok"] and d["sid"] == sid and d["num"] == 1
+    assert d["status"] == "accepted" and d["eta_src"] == "promised"
+    assert d["eta_s"] == 720, d
+    assert not cms.drain_pushes()  # drained exactly once
+
+    # Resync: a count, then one order_push per open order.
+    second = rpc(cms, "order_req", 4, sid=sid, pay="cash", items=[{"drink": 3, "qty": 1}])
+    assert second["num"] == 2
+    replies = cms.handle({"t": "orders_req", "id": 5, "d": {"sid": sid}})
+    assert replies[0]["t"] == "orders_res" and replies[0]["d"]["n"] == 2
+    assert [r["t"] for r in replies[1:]] == ["order_push", "order_push"]
+    # Newest first, so a firmware that keeps only one keeps the latest.
+    assert [r["d"]["num"] for r in replies[1:]] == [2, 1]
+
+    # A fulfilled order drops out of the resync and carries no ETA.
+    assert "fulfilled" in cms.bar_ready(1)
+    assert cms.drain_pushes()[0]["d"].get("eta_s") is None
+    replies = cms.handle({"t": "orders_req", "id": 6, "d": {"sid": sid}})
+    assert replies[0]["d"]["n"] == 1
+    assert [r["d"]["num"] for r in replies[1:]] == [2]
+
+    # Cancelling refunds what was charged and tells the terminal the balance moved.
+    before = cms.balance
+    assert "cancelled" in cms.bar_cancel(2)
+    assert cms.balance == before + 12000
+    assert [p["t"] for p in cms.drain_pushes()] == ["order_push", "balance_push"]
+    assert cms.handle({"t": "orders_req", "id": 7, "d": {"sid": sid}})[0]["d"]["n"] == 0
+
+    # An unknown session is refused rather than leaking another card's orders.
+    assert not rpc(cms, "orders_req", 8, sid="s-nope")["ok"]
+
+    # Orders belong to the CARD, not the session they were placed in. Re-auth
+    # mints a new sid, and the open order has to survive that -- it is how an
+    # order outlives a terminal reboot. A different card sees none of it.
+    cms2 = FakeCms(balance=100000)
+    first = rpc(cms2, "auth_req", 1, uid="AA BB")["sid"]
+    assert rpc(cms2, "order_req", 2, sid=first, pay="cash",
+               items=[{"drink": 1, "qty": 1}])["ok"]
+    again = rpc(cms2, "auth_req", 3, uid="AA BB")["sid"]
+    assert again != first, "re-auth should mint a new sid"
+    replies = cms2.handle({"t": "orders_req", "id": 4, "d": {"sid": again}})
+    assert replies[0]["d"]["n"] == 1, "the order must survive a new session"
+    # ...and be addressed to the session holding the card now, not the old one.
+    assert replies[1]["d"]["sid"] == again, replies[1]
+    other = rpc(cms2, "auth_req", 5, uid="CC DD")["sid"]
+    assert cms2.handle({"t": "orders_req", "id": 6, "d": {"sid": other}})[0]["d"]["n"] == 0
+
+    # Already-closed orders cannot be reopened, and nothing is pushed for them.
+    assert "not open" in cms.bar_ready(1)
+    assert not cms.drain_pushes()
+
+
 if __name__ == "__main__":
     test_mux()
     test_egm()
     test_cms()
-    print("OK: mux framing, EGM SAS subset, CMS flows all pass")
+    test_order_status()
+    print("OK: mux framing, EGM SAS subset, CMS flows, order status all pass")

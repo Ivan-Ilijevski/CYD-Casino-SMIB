@@ -34,5 +34,11 @@ esp_err_t cms_fetch_menu(void);
 esp_err_t cms_order(const char *sid, const cms_order_item_t *items, size_t n,
                     bool pay_points);
 
+// Asks for this card's still-open orders. The answer is CMS_EVT_ORDERS_RES
+// carrying a count, immediately followed by that many CMS_EVT_ORDER_PUSH
+// events. Sent after a successful auth and whenever the link comes back, which
+// is how an order survives a terminal reboot: nothing is stored locally.
+esp_err_t cms_orders_req(const char *sid);
+
 // Copies the most recent menu_res (mutex-protected).
 esp_err_t cms_get_menu(cms_menu_t *out);

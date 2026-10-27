@@ -8,3 +8,5 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
 CONFIG_FREERTOS_HZ=1000
 # Big ASCII digits for the balance display (Cyrillic text uses Sf_Compact_14).
 CONFIG_LV_FONT_MONTSERRAT_28=y
+# Bigger ASCII digits still, for the minutes inside the order countdown ring.
+CONFIG_LV_FONT_MONTSERRAT_48=y

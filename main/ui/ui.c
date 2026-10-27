@@ -7,6 +7,7 @@
 
 static lv_obj_t *s_scr_idle;
 static lv_obj_t *s_scr_main;
+static lv_obj_t *s_scr_order_status;
 
 // Top-layer overlays
 static lv_obj_t *s_offline_badge;
@@ -147,6 +148,7 @@ void ui_init(void)
 
     s_scr_idle = ui_idle_create();
     s_scr_main = ui_main_create();
+    s_scr_order_status = ui_order_status_create();
 
     build_offline_badge();
     build_spinner();
@@ -163,15 +165,39 @@ void ui_show_idle(void)
     lv_screen_load(s_scr_idle);
 }
 
+// p == NULL shows the main screen with the details it already has, which is
+// what coming back from another screen wants.
 void ui_show_main(const player_info_t *p)
 {
-    ui_main_set_player(p);
+    if (p) {
+        ui_main_set_player(p);
+    }
     lv_screen_load(s_scr_main);
 }
 
 void ui_update_balance(uint64_t balance_cents, int32_t points)
 {
     ui_main_set_balance(balance_cents, points);
+}
+
+void ui_show_order_status(void)
+{
+    lv_screen_load(s_scr_order_status);
+}
+
+void ui_order_status_set(const cms_order_state_t *o)
+{
+    ui_order_status_render(o);
+    ui_main_set_order_badge(o);
+}
+
+void ui_order_status_clear(void)
+{
+    ui_main_set_order_badge(NULL);
+    // Don't strand the player on a ring for an order that no longer exists.
+    if (lv_screen_active() == s_scr_order_status) {
+        lv_screen_load(s_scr_main);
+    }
 }
 
 void ui_set_offline(bool offline)

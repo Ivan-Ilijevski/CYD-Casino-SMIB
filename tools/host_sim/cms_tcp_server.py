@@ -17,7 +17,7 @@ import socket
 import threading
 
 from mux import CH_CMS, MuxParser, frame
-from cms_server import FakeCms
+from cms_server import FakeCms, console_loop
 
 
 def parse_args():
@@ -39,11 +39,32 @@ def parse_args():
 def serve_client(conn: socket.socket, addr, cms: FakeCms):
     print(f"[TCP] bridge connected from {addr[0]}:{addr[1]}")
     parser = MuxParser()
+    # A short timeout rather than a blocking recv, so unsolicited frames
+    # (order_push) go out on an idle link instead of waiting for the next
+    # request to arrive.
+    conn.settimeout(0.05)
+
+    def write_cms(msg):
+        if msg.get("t") != "pong":
+            print(f"[CMS>] {json.dumps(msg, ensure_ascii=False)}")
+        conn.sendall(frame(CH_CMS, json.dumps(msg, ensure_ascii=False).encode()))
+
     try:
         while True:
-            data = conn.recv(4096)
-            if not data:
+            # recv returns empty only when the peer has hung up; an idle link
+            # raises instead, so the two cases must not be collapsed.
+            closed = False
+            try:
+                data = conn.recv(4096)
+                closed = not data
+            except socket.timeout:
+                data = b""
+            for push in cms.drain_pushes():
+                write_cms(push)
+            if closed:
                 break
+            if not data:
+                continue
             for chan, payload in parser.feed(data):
                 if chan != CH_CMS:
                     continue
@@ -55,9 +76,7 @@ def serve_client(conn: socket.socket, addr, cms: FakeCms):
                 if msg.get("t") not in ("ping", "hello"):
                     print(f"[CMS<] {json.dumps(msg, ensure_ascii=False)}")
                 for reply in cms.handle(msg):
-                    if reply.get("t") != "pong":
-                        print(f"[CMS>] {json.dumps(reply, ensure_ascii=False)}")
-                    conn.sendall(frame(CH_CMS, json.dumps(reply, ensure_ascii=False).encode()))
+                    write_cms(reply)
     except ConnectionError:
         pass
     finally:
@@ -76,6 +95,10 @@ def main():
     server.bind((args.host, args.port))
     server.listen(2)
     print(f"[TCP] FakeCms listening on {args.host}:{args.port}")
+
+    # Same bar console as host_sim.py, so an order can be accepted/poured from
+    # here too (see host_sim.py's module docstring for the commands).
+    threading.Thread(target=console_loop, args=(cms,), daemon=True).start()
 
     try:
         while True:
