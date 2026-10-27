@@ -29,7 +29,8 @@ typedef struct {
 } sas_frame_t;
 
 typedef struct {
-    uint64_t amount_cents;
+    uint64_t amount_cents;  // ignored for from_egm jobs (read fresh in-job)
+    bool from_egm;
     char txn[24];
 } aft_job_t;
 
@@ -43,7 +44,30 @@ static bool s_link;
 static int s_timeouts;
 static bool s_info_polled;
 static uint32_t s_cycle;
-static bool s_general_b;
+
+#define SAS_LONG_POLL_RETRIES   2   // resend the same long poll up to N times
+
+// Accounting denomination (from 0x1F) -> cents per credit. Real EGMs report
+// their meters in credits of this denom, not cents (gap G3). Standard SAS
+// denomination codes; unknown codes fall back to 1 cent (== our own EGM).
+static uint32_t denom_to_cents(uint8_t code)
+{
+    switch (code) {
+        case 0x01: return 1;     // 0.01
+        case 0x02: return 5;     // 0.05
+        case 0x03: return 10;    // 0.10
+        case 0x04: return 25;    // 0.25
+        case 0x05: return 50;    // 0.50
+        case 0x06: return 100;   // 1.00
+        case 0x07: return 500;   // 5.00
+        case 0x08: return 1000;  // 10.00
+        case 0x09: return 2000;  // 20.00
+        case 0x0A: return 2500;  // 25.00
+        case 0x0B: return 5000;  // 50.00
+        case 0x0C: return 10000; // 100.00
+        default:   return 1;
+    }
+}
 
 // ---------------------------------------------------------------- helpers
 
@@ -88,6 +112,12 @@ static bool sas_exchange(const uint8_t *tx, size_t tx_len, sas_frame_t *rx)
 
 // Long poll: appends the SAS CRC to cmd+body, sends, validates the echo and
 // CRC of the response. Returns response length (or -1).
+//
+// G4 (implied-ACK / busy): the SAS host acknowledges a response implicitly by
+// sending the next poll. If a response is missing or garbled we must repeat
+// the *same* long poll (not move on, which would ack a response we never saw).
+// A one-byte response equal to the EGM address is a "busy" reply — the EGM
+// isn't ready yet — and is also retried, without counting as a link timeout.
 static int sas_long_poll(uint8_t cmd, const uint8_t *body, size_t body_len,
                          sas_frame_t *rx)
 {
@@ -103,19 +133,27 @@ static int sas_long_poll(uint8_t cmd, const uint8_t *body, size_t body_len,
     tx[n++] = (uint8_t)(crc & 0xFF);
     tx[n++] = (uint8_t)(crc >> 8);
 
-    if (!sas_exchange(tx, n, rx)) {
-        return -1;
+    for (int attempt = 0; attempt <= SAS_LONG_POLL_RETRIES; attempt++) {
+        if (!sas_exchange(tx, n, rx)) {
+            continue; // no response — resend the same poll
+        }
+        // Busy: EGM answered with just its address byte. Retry the same poll.
+        if (rx->len == 1 && rx->buf[0] == SAS_EGM_ADDR) {
+            ESP_LOGD(TAG, "long poll %02X: busy, retrying", cmd);
+            continue;
+        }
+        if (rx->len < 4 || rx->buf[0] != SAS_EGM_ADDR || rx->buf[1] != cmd) {
+            ESP_LOGW(TAG, "long poll %02X: bad echo (attempt %d)", cmd, attempt);
+            continue;
+        }
+        uint16_t rx_crc = (uint16_t)rx->buf[rx->len - 2] | ((uint16_t)rx->buf[rx->len - 1] << 8);
+        if (crc16_kermit(rx->buf, rx->len - 2) != rx_crc) {
+            ESP_LOGW(TAG, "long poll %02X: bad CRC (attempt %d)", cmd, attempt);
+            continue;
+        }
+        return rx->len;
     }
-    if (rx->len < 4 || rx->buf[0] != SAS_EGM_ADDR || rx->buf[1] != cmd) {
-        ESP_LOGW(TAG, "long poll %02X: bad echo", cmd);
-        return -1;
-    }
-    uint16_t rx_crc = (uint16_t)rx->buf[rx->len - 2] | ((uint16_t)rx->buf[rx->len - 1] << 8);
-    if (crc16_kermit(rx->buf, rx->len - 2) != rx_crc) {
-        ESP_LOGW(TAG, "long poll %02X: bad CRC", cmd);
-        return -1;
-    }
-    return rx->len;
+    return -1;
 }
 
 // ---------------------------------------------------------------- link
@@ -152,8 +190,9 @@ static void mark_response_timeout(void)
 
 static void do_general_poll(void)
 {
-    uint8_t poll = s_general_b ? SAS_GENERAL_POLL_B : SAS_GENERAL_POLL_A;
-    s_general_b = !s_general_b;
+    // G1: the addressed general poll is 0x80|addr (0x81 for us) — no A/B
+    // alternation. A real EGM at address 1 ignores a bare 0x80.
+    uint8_t poll = SAS_GENERAL_POLL;
 
     sas_frame_t rx;
     if (!sas_exchange(&poll, 1, &rx)) {
@@ -184,11 +223,13 @@ static void do_current_credits(void)
     if (rx.len != 2 + 4 + 2) {
         return;
     }
+    // G3: 0x1A is in credits of the accounting denom -> convert to cents.
     uint64_t credits = sas_bcd_to_u64(rx.buf + 2, 4);
     bool changed = false;
     xSemaphoreTake(s_status_lock, portMAX_DELAY);
-    changed = (s_status.credits_cents != credits);
-    s_status.credits_cents = credits;
+    uint64_t credits_cents = credits * denom_to_cents(s_status.denom_code);
+    changed = (s_status.credits_cents != credits_cents);
+    s_status.credits_cents = credits_cents;
     xSemaphoreGive(s_status_lock);
     if (changed) {
         sas_event_t ev = { .type = SAS_EVT_CREDITS, .credits_cents = credits };
@@ -207,11 +248,14 @@ static void do_total_meters(void)
     if (rx.len != 2 + 5 * 4 + 2) {
         return;
     }
+    // G3: the four money meters are in credits of the accounting denom ->
+    // convert to cents; games played is a raw count and stays as-is.
     xSemaphoreTake(s_status_lock, portMAX_DELAY);
-    s_status.m_coin_in  = sas_bcd_to_u64(rx.buf + 2, 4);
-    s_status.m_coin_out = sas_bcd_to_u64(rx.buf + 6, 4);
-    s_status.m_drop     = sas_bcd_to_u64(rx.buf + 10, 4);
-    s_status.m_jackpot  = sas_bcd_to_u64(rx.buf + 14, 4);
+    uint32_t cents = denom_to_cents(s_status.denom_code);
+    s_status.m_coin_in  = sas_bcd_to_u64(rx.buf + 2, 4)  * cents;
+    s_status.m_coin_out = sas_bcd_to_u64(rx.buf + 6, 4)  * cents;
+    s_status.m_drop     = sas_bcd_to_u64(rx.buf + 10, 4) * cents;
+    s_status.m_jackpot  = sas_bcd_to_u64(rx.buf + 14, 4) * cents;
     s_status.m_games    = sas_bcd_to_u64(rx.buf + 18, 4);
     xSemaphoreGive(s_status_lock);
 }
@@ -226,7 +270,11 @@ static void do_info_polls(void)
         xSemaphoreTake(s_status_lock, portMAX_DELAY);
         memcpy(s_status.game_id, rx.buf + 2, 2);
         s_status.game_id[2] = '\0';
+        // G3: accounting denomination sits after game id (2) + additional id (3)
+        s_status.denom_code = rx.buf[7];
         xSemaphoreGive(s_status_lock);
+        ESP_LOGI(TAG, "EGM denom code %02X (%u cents/credit)",
+                 rx.buf[7], (unsigned)denom_to_cents(rx.buf[7]));
     }
 
     // 0x54: length + SAS version (3 ASCII) + serial (ASCII, <= 40)
@@ -283,10 +331,38 @@ static int parse_aft_response(const sas_frame_t *rx, uint64_t *out_cashable)
     return rx->buf[4];
 }
 
+static void post_aft_result(const char *txn, bool ok, uint8_t status,
+                            uint64_t moved_cents)
+{
+    sas_event_t ev = { .type = SAS_EVT_AFT_RESULT, .ok = ok,
+                       .aft_status = status, .credits_cents = moved_cents };
+    snprintf(ev.txn, sizeof(ev.txn), "%s", txn);
+    post_sas_event(&ev);
+}
+
 static void run_aft_job(const aft_job_t *job)
 {
-    ESP_LOGI(TAG, "AFT transfer %llu cents, txn %s",
-             (unsigned long long)job->amount_cents, job->txn);
+    uint64_t amount = job->amount_cents;
+    if (job->from_egm) {
+        // Cash out whatever is on the machine right now: read the credit
+        // meter fresh so the amount can't be a stale snapshot.
+        sas_frame_t crx;
+        if (sas_long_poll(SAS_CMD_CURRENT_CREDITS, NULL, 0, &crx) < 0 ||
+            crx.len != 2 + 4 + 2) {
+            ESP_LOGW(TAG, "cashout: credits poll failed, txn %s", job->txn);
+            post_aft_result(job->txn, false, 0xFF, 0);
+            return;
+        }
+        amount = sas_bcd_to_u64(crx.buf + 2, 4);
+        if (amount == 0) {
+            ESP_LOGI(TAG, "cashout: no credits on the machine, txn %s", job->txn);
+            post_aft_result(job->txn, true, SAS_AFT_STATUS_FULL_OK, 0);
+            return;
+        }
+    }
+
+    ESP_LOGI(TAG, "AFT %s %llu cents, txn %s", job->from_egm ? "cashout" : "transfer",
+             (unsigned long long)amount, job->txn);
 
     uint32_t asset;
     xSemaphoreTake(s_status_lock, portMAX_DELAY);
@@ -299,8 +375,9 @@ static void run_aft_job(const aft_job_t *job)
     body[n++] = 0; // length placeholder
     body[n++] = SAS_AFT_CODE_FULL;          // transfer code
     body[n++] = 0x00;                       // transaction index
-    body[n++] = 0x00;                       // transfer type: in-house cashable -> EGM
-    sas_u64_to_bcd(job->amount_cents, body + n, 5); n += 5;  // cashable
+    body[n++] = job->from_egm ? SAS_AFT_TYPE_FROM_EGM
+                              : SAS_AFT_TYPE_TO_EGM;  // transfer type
+    sas_u64_to_bcd(amount, body + n, 5); n += 5;      // cashable
     memset(body + n, 0, 5); n += 5;         // restricted
     memset(body + n, 0, 5); n += 5;         // nonrestricted
     body[n++] = 0x00;                       // transfer flags
@@ -347,10 +424,8 @@ static void run_aft_job(const aft_job_t *job)
     ESP_LOGI(TAG, "AFT result: %s (status %02X) txn %s",
              ok ? "success" : "FAILED", (unsigned)status, job->txn);
 
-    sas_event_t ev = { .type = SAS_EVT_AFT_RESULT, .ok = ok,
-                       .aft_status = (uint8_t)status };
-    snprintf(ev.txn, sizeof(ev.txn), "%s", job->txn);
-    post_sas_event(&ev);
+    post_aft_result(job->txn, ok, (uint8_t)status,
+                    (ok && job->from_egm) ? amount : 0);
 }
 
 esp_err_t sas_aft_transfer(uint64_t amount_cents, const char *txn_id)
@@ -359,6 +434,16 @@ esp_err_t sas_aft_transfer(uint64_t amount_cents, const char *txn_id)
         return ESP_ERR_INVALID_STATE;
     }
     aft_job_t job = { .amount_cents = amount_cents };
+    snprintf(job.txn, sizeof(job.txn), "%s", txn_id);
+    return xQueueSend(s_aft_queue, &job, 0) == pdTRUE ? ESP_OK : ESP_ERR_INVALID_STATE;
+}
+
+esp_err_t sas_aft_cashout(const char *txn_id)
+{
+    if (!s_link) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    aft_job_t job = { .from_egm = true };
     snprintf(job.txn, sizeof(job.txn), "%s", txn_id);
     return xQueueSend(s_aft_queue, &job, 0) == pdTRUE ? ESP_OK : ESP_ERR_INVALID_STATE;
 }

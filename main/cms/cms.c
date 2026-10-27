@@ -146,9 +146,14 @@ esp_err_t cms_logout(const char *sid, const char *reason)
     return send_json(root); // fire-and-forget: no pending entry
 }
 
+void cms_make_txn(char out[24])
+{
+    snprintf(out, 24, "SMIB-%06u", (unsigned)(s_next_txn++));
+}
+
 esp_err_t cms_debit(const char *sid, uint64_t cents, char txn_out[24])
 {
-    snprintf(txn_out, 24, "SMIB-%06u", (unsigned)(s_next_txn++));
+    cms_make_txn(txn_out);
     uint32_t id = s_next_id++;
     cJSON *d;
     cJSON *root = make_envelope("debit_req", id, &d);
@@ -175,6 +180,17 @@ esp_err_t cms_rollback(const char *txn, const char *reason)
     cJSON_AddStringToObject(d, "txn", txn);
     cJSON_AddStringToObject(d, "reason", reason);
     return request(root, id, CMS_EVT_ROLLBACK_RES, txn);
+}
+
+esp_err_t cms_credit(const char *sid, uint64_t cents, const char *txn)
+{
+    uint32_t id = s_next_id++;
+    cJSON *d;
+    cJSON *root = make_envelope("credit_req", id, &d);
+    cJSON_AddStringToObject(d, "sid", sid);
+    cJSON_AddStringToObject(d, "txn", txn);
+    cJSON_AddNumberToObject(d, "amount", (double)cents);
+    return request(root, id, CMS_EVT_CREDIT_RES, txn);
 }
 
 esp_err_t cms_fetch_menu(void)
@@ -293,6 +309,7 @@ static const msg_map_t k_msg_map[] = {
     { "debit_res",          CMS_EVT_DEBIT_RES,    false },
     { "debit_commit_res",   CMS_EVT_COMMIT_RES,   false },
     { "debit_rollback_res", CMS_EVT_ROLLBACK_RES, false },
+    { "credit_res",         CMS_EVT_CREDIT_RES,   false },
     { "menu_res",           CMS_EVT_MENU_RES,     false },
     { "order_res",          CMS_EVT_ORDER_RES,    false },
     { "balance_push",       CMS_EVT_BALANCE_PUSH, true },

@@ -12,7 +12,8 @@ DEFAULT_MENU = [
 
 class FakeCms:
     def __init__(self, player_name="Иван Илијевски", balance=1250000, points=340,
-                 uid=None, fail_auth=False, fail_debit=False, drop_commit=False):
+                 uid=None, fail_auth=False, fail_debit=False, drop_commit=False,
+                 drop_credit=False):
         self.player_name = player_name
         self.balance = balance
         self.points = points
@@ -20,6 +21,7 @@ class FakeCms:
         self.fail_auth = fail_auth
         self.fail_debit = fail_debit
         self.drop_commit = drop_commit  # swallow the first commit (retry test)
+        self.drop_credit = drop_credit  # swallow the first cashout credit
         self.menu = DEFAULT_MENU
         self.sessions = {}
         self._next_sid = 1
@@ -122,6 +124,22 @@ class FakeCms:
             self.log(f"rollback {txn}, balance {self.balance / 100:.2f}")
         # idempotent: repeated rollbacks (or after commit-refusal) return ok
         return [self._res("debit_rollback_res", mid, txn=txn, balance=self.balance)]
+
+    def _on_credit_req(self, mid, d):
+        # Cashout: machine credits already moved off the EGM, deposit them on
+        # the card. Idempotent by txn — the firmware retries until confirmed.
+        txn, amount = d.get("txn", ""), int(d.get("amount", 0))
+        if self.drop_credit:
+            self.drop_credit = False
+            self.log(f"DROPPING credit for {txn} (testing retry)")
+            return []
+        rec = self.txns.get(txn)
+        if rec is None:
+            self.balance += amount
+            self.txns[txn] = dict(amount=amount, state="credited")
+            self.log(f"CREDIT {amount / 100:.2f} txn {txn}, balance {self.balance / 100:.2f}")
+        return [self._res("credit_res", mid, txn=txn,
+                          balance=self.balance, points=self.points)]
 
     # ------------------------------------------------------------ drinks
 

@@ -1,0 +1,14 @@
+# ES3C35P (3.5" ESP32-S3, N16R8). Merged after sdkconfig.defaults for esp32s3.
+CONFIG_SMIB_BOARD_ES3C35P=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+# 8 MB octal PSRAM; LVGL/cJSON heap can spill there, DMA buffers stay internal.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+# 1.5 MB app slot (the 1 MB default is ~90% used); the chip has 16 MB.
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+# No CH340 on this board: the single USB-C is the S3's native USB-Serial-JTAG,
+# a separate peripheral from UART0. UART0 (header pins 43/44) stays the
+# protocol link to the machine, so the dev console goes here instead of off.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

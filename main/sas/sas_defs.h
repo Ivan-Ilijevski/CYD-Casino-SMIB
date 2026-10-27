@@ -7,10 +7,11 @@
 
 #define SAS_EGM_ADDR            0x01
 
-// General polls (single byte, no CRC). The EGM responds with one exception
-// byte; 0x00 = no activity.
-#define SAS_GENERAL_POLL_A      0x80
-#define SAS_GENERAL_POLL_B      0x81
+// General poll (single byte, no CRC): the addressed poll is 0x80 | address.
+// For our EGM at address 1 that is 0x81. There is no A/B alternation — the
+// alternating 0x80/0x81 was gap G1 (a real EGM at address 1 ignores 0x80).
+// The EGM responds with one exception byte; 0x00 = no activity.
+#define SAS_GENERAL_POLL        (0x80 | SAS_EGM_ADDR)
 
 // Long polls (framed [addr][cmd][body][crc16 lo][crc16 hi])
 #define SAS_CMD_TOTAL_METERS    0x19  // coin-in/out, drop, jackpot, games (4-byte BCD each)
@@ -31,6 +32,10 @@
 // AFT transfer codes (request byte 0 of the 0x72 body)
 #define SAS_AFT_CODE_FULL       0x00  // full transfer request
 #define SAS_AFT_CODE_INTERROGATE 0xFF
+
+// AFT transfer types (request byte 3 of the 0x72 body)
+#define SAS_AFT_TYPE_TO_EGM     0x00  // in-house cashable -> machine
+#define SAS_AFT_TYPE_FROM_EGM   0x80  // in-house cashable, machine -> host
 
 // AFT transfer status (response)
 #define SAS_AFT_STATUS_FULL_OK  0x00

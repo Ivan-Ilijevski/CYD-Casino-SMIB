@@ -1,0 +1,20 @@
+menu "SMIB board"
+
+    choice SMIB_BOARD
+        prompt "Target board"
+        default SMIB_BOARD_ES3C35P if IDF_TARGET_ESP32S3
+        default SMIB_BOARD_E32R40T
+        help
+            Hardware the firmware is built for. Selects the pin map
+            (main/boards/) and the display/audio drivers.
+
+        config SMIB_BOARD_E32R40T
+            bool "4.0\" ESP32-32E CYD (E32R40T): ST7796 SPI + XPT2046"
+            depends on IDF_TARGET_ESP32
+
+        config SMIB_BOARD_ES3C35P
+            bool "3.5\" ESP32-S3 (ES3C35P): ST77922 QSPI + capacitive touch"
+            depends on IDF_TARGET_ESP32S3
+    endchoice
+
+endmenu

@@ -28,11 +28,11 @@ def long_poll(cmd, body=b""):
     return with_crc(bytes([ADDR, cmd]) + body)
 
 
-def build_fw_aft_request(amount, txn):
+def build_fw_aft_request(amount, txn, ttype=0x00):
     """Byte-for-byte replica of the firmware's 0x72 full-transfer body."""
     body = bytearray()
     body.append(0)                      # length placeholder
-    body += bytes([0x00, 0x00, 0x00])   # code, index, type
+    body += bytes([0x00, 0x00, ttype])  # code, index, type (0x80 = from EGM)
     body += u64_to_bcd(amount, 5)
     body += bytes(5) + bytes(5)         # restricted, nonrestricted
     body.append(0x00)                   # flags
@@ -66,8 +66,8 @@ def test_egm():
     assert resp[4] == AFT_OK, resp.hex()
     assert bcd_to_u64(resp[7:12]) == 50000
     assert egm.credits == 50000
-    # Completion exception queued for the next general poll
-    assert egm.handle(bytes([0x80])) == b"\x69"
+    # Completion exception queued for the next general poll (addressed 0x81)
+    assert egm.handle(bytes([0x81])) == b"\x69"
     # Failure mode
     egm_fail = FakeEgm(aft_status=0x80)
     resp = egm_fail.handle(build_fw_aft_request(1000, "SMIB-000002"))
@@ -80,6 +80,23 @@ def test_egm():
     assert egm_p.handle(interrogate)[4] == 0x40
     assert egm_p.handle(interrogate)[4] == AFT_OK
     assert egm_p.credits == 2000
+    # From-machine transfer (cashout): type 0x80 moves credits off the EGM
+    egm_c = FakeEgm()
+    egm_c.credits = 30000
+    resp = egm_c.handle(build_fw_aft_request(30000, "SMIB-000004", ttype=0x80))
+    assert resp[4] == AFT_OK, resp.hex()
+    assert resp[6] == 0x80              # transfer type echoed in the response
+    assert bcd_to_u64(resp[7:12]) == 30000
+    assert egm_c.credits == 0
+    assert egm_c.handle(bytes([0x81])) == b"\x69"  # completion exception
+    # Cashout larger than the machine's credits -> refused, nothing moved
+    egm_c.credits = 1000
+    resp = egm_c.handle(build_fw_aft_request(2000, "SMIB-000005", ttype=0x80))
+    assert resp[4] == 0x80 and egm_c.credits == 1000
+    # G3: the accounting denomination is reported in 0x1F at offset 7
+    egm_d = FakeEgm(denom_code=0x03)
+    resp = egm_d.handle(long_poll(0x1F))
+    assert resp[7] == 0x03, resp.hex()
 
 
 def rpc(cms, t, mid, **d):
@@ -116,6 +133,19 @@ def test_cms():
     # Unavailable drink -> empty order
     assert not rpc(cms, "order_req", 11, sid=sid, pay="cash",
                    items=[{"drink": 5, "qty": 1}])["ok"]
+    # Cashout credit: applied once, idempotent by txn
+    bal = cms.balance
+    cred = rpc(cms, "credit_req", 12, sid=sid, txn="C1", amount=25000)
+    assert cred["ok"] and cred["balance"] == bal + 25000
+    cred = rpc(cms, "credit_req", 13, sid=sid, txn="C1", amount=25000)
+    assert cred["ok"] and cred["balance"] == bal + 25000  # repeat: no double add
+    assert cms.balance == bal + 25000
+    # drop_credit swallows only the first credit (firmware retry path)
+    cms2 = FakeCms(balance=1000, drop_credit=True)
+    sid2 = rpc(cms2, "auth_req", 1, uid="CC DD")["sid"]
+    assert rpc(cms2, "credit_req", 2, sid=sid2, txn="C2", amount=500) is None
+    cred = rpc(cms2, "credit_req", 3, sid=sid2, txn="C2", amount=500)
+    assert cred["ok"] and cms2.balance == 1500
     # JSON envelope survives UTF-8
     txt = json.dumps({"t": "menu_res", "d": {"items": cms.menu}}, ensure_ascii=False)
     assert "Кафе" in txt

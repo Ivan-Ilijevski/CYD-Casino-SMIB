@@ -153,6 +153,11 @@ void ui_init(void)
     build_toast();
 }
 
+uint32_t ui_touch_idle_ms(void)
+{
+    return lv_display_get_inactive_time(NULL);
+}
+
 void ui_show_idle(void)
 {
     lv_screen_load(s_scr_idle);

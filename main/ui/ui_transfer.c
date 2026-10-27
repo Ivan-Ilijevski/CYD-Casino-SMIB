@@ -52,7 +52,7 @@ static void confirm_cb(lv_event_t *e)
     // and closes it when the transfer chain resolves.
     lv_obj_add_flag(s_picker, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s_progress_label, LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(s_progress_label, "Обработка…");
+    lv_label_set_text(s_progress_label, "Обработка...");
     app_on_ui_transfer_confirm(s_selected_cents);
 }
 
@@ -115,7 +115,7 @@ void ui_transfer_open(uint64_t balance_cents)
         }
     }
     // "Everything on the card"
-    lv_obj_t *all_btn = small_button(presets, "Сè", preset_cb,
+    lv_obj_t *all_btn = small_button(presets, "Преостанато", preset_cb,
                                      (void *)(uintptr_t)balance_cents, false);
     if (balance_cents == 0) {
         lv_obj_add_state(all_btn, LV_STATE_DISABLED);

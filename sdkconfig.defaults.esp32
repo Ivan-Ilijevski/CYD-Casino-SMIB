@@ -1,0 +1,2 @@
+# E32R40T (4.0" ESP32-32E CYD). Merged after sdkconfig.defaults for esp32.
+CONFIG_SMIB_BOARD_E32R40T=y

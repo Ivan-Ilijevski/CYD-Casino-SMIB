@@ -6,7 +6,8 @@
 
 typedef enum {
     ST_IDLE,            // unauthenticated: logo + card prompt
-    ST_AUTHENTICATING,  // card tapped, waiting for CMS auth_res
+    ST_HOLDING,         // card present, waiting out the 3 s hold window
+    ST_AUTHENTICATING,  // hold complete, waiting for CMS auth_res
     ST_AUTHED,          // main screen: balance / points / order / transfer
 } app_state_t;
 
@@ -20,3 +21,4 @@ void app_tick(void);
 void app_on_ui_transfer_confirm(uint64_t amount_cents);
 void app_on_ui_order_confirm(void); // order details read from the ui_order module
 void app_on_ui_order_open(void);
+void app_on_ui_cashout(void);       // machine credits -> card, then logout

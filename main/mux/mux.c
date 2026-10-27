@@ -134,9 +134,11 @@ esp_err_t mux_init(int baud_rate)
     };
     ESP_ERROR_CHECK(uart_driver_install(MUX_UART, 4096, 4096, 0, NULL, 0));
     ESP_ERROR_CHECK(uart_param_config(MUX_UART, &cfg));
-    // With CONFIG_ESP_CONSOLE_NONE nothing routes GPIO1/3 to the UART0
+    // With CONFIG_ESP_CONSOLE_NONE nothing routes the UART0 pins to the
     // peripheral for the app (a UART console would have), so do it explicitly.
-    ESP_ERROR_CHECK(uart_set_pin(MUX_UART, 1, 3, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    // The pins differ per target, so they come from the board header.
+    ESP_ERROR_CHECK(uart_set_pin(MUX_UART, MUX_UART_TX, MUX_UART_RX,
+                                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 
     s_tx_mutex = xSemaphoreCreateMutex();
     if (!s_tx_mutex) {

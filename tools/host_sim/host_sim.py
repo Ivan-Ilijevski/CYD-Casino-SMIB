@@ -12,6 +12,7 @@ Usage:
         [--aft-status 0x80]        EGM fails AFT transfers -> rollback path
         [--aft-pending N]          EGM stays 'pending' for N interrogates
         [--drop-commit]            swallow first commit -> retry path
+        [--drop-credit]            swallow first cashout credit -> retry path
         [--no-cms]                 CMS silent (offline badge test)
         [--sas-verbose]            print every SAS exchange
 """
@@ -41,6 +42,7 @@ def parse_args():
     p.add_argument("--aft-status", type=lambda s: int(s, 0), default=0x00)
     p.add_argument("--aft-pending", type=int, default=0)
     p.add_argument("--drop-commit", action="store_true")
+    p.add_argument("--drop-credit", action="store_true")
     p.add_argument("--no-cms", action="store_true")
     p.add_argument("--sas-verbose", action="store_true")
     return p.parse_args()
@@ -53,7 +55,7 @@ def main():
                   verbose=args.sas_verbose)
     cms = FakeCms(player_name=args.player, balance=args.balance, points=args.points,
                   uid=args.uid, fail_auth=args.fail_auth, fail_debit=args.fail_debit,
-                  drop_commit=args.drop_commit)
+                  drop_commit=args.drop_commit, drop_credit=args.drop_credit)
 
     # Opening the port toggles DTR/RTS, which resets the ESP32 on most CYD
     # boards; expect boot-ROM garbage, the parser resyncs past it.

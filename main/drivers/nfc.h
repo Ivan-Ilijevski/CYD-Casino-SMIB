@@ -9,4 +9,4 @@
 void nfc_init(void);
 
 // Initial prompt shown on the idle screen.
-#define CARD_PROMPT_TEXT "Доближете ја картичката до читачот"
+#define CARD_PROMPT_TEXT "Доближете ја картичката"

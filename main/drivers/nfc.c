@@ -59,14 +59,31 @@ void nfc_init(void)
         .rst_io_num = PIN_NUM_RC522_RST,
     };
 
-    ESP_ERROR_CHECK(rc522_spi_create(&driver_config, &rc522_driver));
-    ESP_ERROR_CHECK(rc522_driver_install(rc522_driver));
-
-    rc522_config_t scanner_config = {
-        .driver = rc522_driver,
-    };
-    ESP_ERROR_CHECK(rc522_create(&scanner_config, &rc522_scanner));
-    ESP_ERROR_CHECK(rc522_register_events(rc522_scanner, RC522_EVENT_PICC_STATE_CHANGED, on_picc_state_changed, NULL));
-    ESP_ERROR_CHECK(rc522_start(rc522_scanner));
+    // A reader that is absent or not answering must not take the terminal
+    // down. nfc_init() is the last step before the LVGL loop, so aborting here
+    // used to reboot before a single frame was ever flushed — the screen stayed
+    // on the panel's power-on noise. Log and come up without card scanning
+    // instead; rc522_start() leaving the state at CREATED just idles its task.
+    esp_err_t err = rc522_spi_create(&driver_config, &rc522_driver);
+    if (err == ESP_OK) {
+        err = rc522_driver_install(rc522_driver);
+    }
+    if (err == ESP_OK) {
+        rc522_config_t scanner_config = {
+            .driver = rc522_driver,
+        };
+        err = rc522_create(&scanner_config, &rc522_scanner);
+    }
+    if (err == ESP_OK) {
+        err = rc522_register_events(rc522_scanner, RC522_EVENT_PICC_STATE_CHANGED,
+                                    on_picc_state_changed, NULL);
+    }
+    if (err == ESP_OK) {
+        err = rc522_start(rc522_scanner);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "RC522 unavailable (%s); card scanning disabled", esp_err_to_name(err));
+        return;
+    }
     ESP_LOGI(TAG, "RC522 initialized");
 }

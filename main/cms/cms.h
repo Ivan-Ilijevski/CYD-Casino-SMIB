@@ -24,6 +24,12 @@ esp_err_t cms_logout(const char *sid, const char *reason); // fire-and-forget
 esp_err_t cms_debit(const char *sid, uint64_t cents, char txn_out[24]);
 esp_err_t cms_commit(const char *txn);
 esp_err_t cms_rollback(const char *txn, const char *reason);
+
+// Generates a fresh transaction id (app task only, like cms_debit).
+void cms_make_txn(char out[24]);
+// Cashout deposit: credits cents onto the card. Idempotent by txn — safe to
+// re-send until CMS_EVT_CREDIT_RES confirms.
+esp_err_t cms_credit(const char *sid, uint64_t cents, const char *txn);
 esp_err_t cms_fetch_menu(void);
 esp_err_t cms_order(const char *sid, const cms_order_item_t *items, size_t n,
                     bool pay_points);

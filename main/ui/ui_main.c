@@ -1,4 +1,5 @@
-// Authenticated main screen: player name, balance, points, Order + Transfer.
+// Authenticated main screen: player name, balance, points, and the
+// Order / Transfer / Cashout actions.
 #include <stdio.h>
 #include <string.h>
 
@@ -26,11 +27,17 @@ static void transfer_btn_cb(lv_event_t *e)
     ui_transfer_open(s_balance_cents);
 }
 
+static void cashout_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    app_on_ui_cashout();
+}
+
 static lv_obj_t *make_button(lv_obj_t *parent, const char *text, bool primary,
-                             lv_event_cb_t cb)
+                             lv_event_cb_t cb, int w, int h)
 {
     lv_obj_t *btn = lv_button_create(parent);
-    lv_obj_set_size(btn, 210, 64);
+    lv_obj_set_size(btn, w, h);
     if (primary) {
         lv_obj_set_style_bg_color(btn, UI_COL_ACCENT, 0);
     } else {
@@ -53,18 +60,23 @@ lv_obj_t *ui_main_create(void)
     lv_obj_t *scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr, UI_COL_BG, LV_PART_MAIN);
 
-    // Top bar: player name left, points right
+    // Top bar: cashout button left, player name + points right.
+    lv_obj_t *cashout = make_button(scr, "ИСПЛАТИ", false, cashout_btn_cb, 140, 48);
+    lv_obj_align(cashout, LV_ALIGN_TOP_LEFT, 8, 8);
+
     s_name_label = lv_label_create(scr);
     lv_obj_set_style_text_font(s_name_label, &Sf_Compact_14, 0);
     lv_obj_set_style_text_color(s_name_label, UI_COL_TEXT, 0);
+    lv_obj_set_style_text_align(s_name_label, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(s_name_label, "");
-    lv_obj_align(s_name_label, LV_ALIGN_TOP_LEFT, 14, 12);
+    lv_obj_align(s_name_label, LV_ALIGN_TOP_RIGHT, -8, 10);
 
     s_points_label = lv_label_create(scr);
     lv_obj_set_style_text_font(s_points_label, &Sf_Compact_14, 0);
     lv_obj_set_style_text_color(s_points_label, UI_COL_ACCENT, 0);
+    lv_obj_set_style_text_align(s_points_label, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(s_points_label, "");
-    lv_obj_align(s_points_label, LV_ALIGN_TOP_LEFT, 14, 36);
+    lv_obj_align(s_points_label, LV_ALIGN_TOP_RIGHT, -8, 34);
 
     // Balance block, centered
     lv_obj_t *balance_caption = lv_label_create(scr);
@@ -92,16 +104,27 @@ lv_obj_t *ui_main_create(void)
     lv_label_set_text(s_currency_label, s_currency);
     lv_obj_set_style_pad_bottom(s_currency_label, 4, 0);
 
-    // Action buttons
+    // Club logo bottom-right (created first: the action buttons must draw
+    // above its transparent corner), action buttons bottom-left.
+    LV_IMG_DECLARE(royal_club_zelenezburg_logo_transparent);
+    lv_obj_t *logo = lv_img_create(scr);
+    lv_img_set_src(logo, &royal_club_zelenezburg_logo_transparent);
+    // ~69% render pinned to the source's bottom-right corner so the scaled
+    // pixels hug the screen corner despite the full-size layout box.
+    lv_image_set_pivot(logo, royal_club_zelenezburg_logo_transparent.header.w,
+                       royal_club_zelenezburg_logo_transparent.header.h);
+    lv_image_set_scale(logo, 176);
+    lv_obj_align(logo, LV_ALIGN_BOTTOM_RIGHT, -6, -6);
+
     lv_obj_t *btn_row = lv_obj_create(scr);
     lv_obj_remove_style_all(btn_row);
-    lv_obj_set_size(btn_row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_size(btn_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_align(btn_row, LV_ALIGN_BOTTOM_MID, 0, -20);
+    lv_obj_set_style_pad_column(btn_row, 12, 0);
+    lv_obj_align(btn_row, LV_ALIGN_BOTTOM_LEFT, 8, -10);
 
-    make_button(btn_row, "НАРАЧАЈ", true, order_btn_cb);
-    make_button(btn_row, "ПРЕФРЛИ", false, transfer_btn_cb);
+    make_button(btn_row, "НАРАЧАЈ", true, order_btn_cb, 165, 64);
+    make_button(btn_row, "ПРЕФРЛИ", false, transfer_btn_cb, 165, 64);
 
     return scr;
 }

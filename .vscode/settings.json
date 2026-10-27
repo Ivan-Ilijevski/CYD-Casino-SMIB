@@ -1,15 +1,15 @@
 {
   "C_Cpp.intelliSenseEngine": "default",
   "idf.openOcdConfigs": [
-    "board/esp32-wrover-kit-3.3v.cfg"
+    "board/esp32s3-builtin.cfg"
   ],
-  "idf.port": "/dev/tty.wchusbserial210",
+  "idf.port": "/dev/tty.usbmodem101",
   "idf.currentSetup": "/Users/ivanilijevski/.espressif/v5.5.2/esp-idf",
   "idf.espIdfPath": "/Users/ivanilijevski/.espressif/v5.5.2/esp-idf",
   "idf.toolsPath": "/Users/ivanilijevski/.espressif/tools",
   "idf.pythonInstallPath": "/Users/ivanilijevski/.espressif/tools/python/v5.5.2/venv/bin/python",
   "idf.customExtraVars": {
-    "IDF_TARGET": "esp32",
+    "IDF_TARGET": "esp32s3",
     "IDF_PATH": "/Users/ivanilijevski/.espressif/v5.5.2/esp-idf",
     "IDF_TOOLS_PATH": "/Users/ivanilijevski/.espressif/tools"
   },

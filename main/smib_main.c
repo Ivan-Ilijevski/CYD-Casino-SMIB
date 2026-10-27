@@ -21,10 +21,13 @@ static const char *TAG = "smib";
 void app_main(void)
 {
     display_backlight_on();
-    display_init();
+    // Bring the mux up first so log_bridge_install() is live before the rest
+    // of the bring-up: with CONFIG_ESP_CONSOLE_NONE, LOG frames on the mux are
+    // the only way to see where boot stops.
     ESP_ERROR_CHECK(mux_init(MUX_BAUD));
     log_bridge_install();
     ESP_LOGI(TAG, "SMIB fw %s booted", SMIB_FW_VERSION);
+    display_init();
     audio_init();
     app_init();
     ESP_ERROR_CHECK(cms_init());

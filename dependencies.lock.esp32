@@ -80,6 +80,6 @@ direct_dependencies:
 - espressif/esp_lcd_st7796
 - idf
 - lvgl/lvgl
-manifest_hash: ddff8f25caca540a63a50a9f5480b030baaab3af1b574a46a36f2c5e2f2f5c4c
+manifest_hash: da2001b3a73e64873a49915a64f068364d83d3720209bb56c3753f2c05a14d69
 target: esp32
 version: 2.0.0

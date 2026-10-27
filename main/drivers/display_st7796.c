@@ -111,7 +111,7 @@ static void init_lcd_st7796(void)
     // Configure display orientation for CYD (landscape mode)
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, false));
     ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_handle, true));   // swap axes for landscape
-    ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, false, false));
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, true, true));  // 180 rotation
 
     // Set gap to fix display offset issue
     ESP_ERROR_CHECK(esp_lcd_panel_set_gap(panel_handle, 0, 0));
@@ -138,8 +138,8 @@ static void init_touch_xpt2046(void)
         },
         .flags = {
             .swap_xy = 1,
-            .mirror_x = 1,
-            .mirror_y = 1,
+            .mirror_x = 0,   // 180 rotation (flip both axes to match panel)
+            .mirror_y = 0,
         },
     };
     ESP_ERROR_CHECK(esp_lcd_touch_new_spi_xpt2046(tp_io_handle, &tp_config, &tp_handle));

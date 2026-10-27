@@ -13,6 +13,9 @@ void ui_show_idle(void);
 void ui_show_main(const player_info_t *p);
 void ui_update_balance(uint64_t balance_cents, int32_t points);
 
+// Milliseconds since the last touch input (LVGL inactivity clock).
+uint32_t ui_touch_idle_ms(void);
+
 // Overlays (live on the top layer, visible over any screen)
 void ui_set_offline(bool offline);
 void ui_show_spinner(const char *text);
@@ -24,10 +27,10 @@ void ui_transfer_open(uint64_t balance_cents);
 void ui_transfer_progress(const char *step_text);
 void ui_transfer_close(void);
 
-// Order modal (drink list + quantities)
+// Order modal (drink list, one of each item max)
 void ui_order_open(const cms_menu_t *menu);
 void ui_order_close(void);
-// Reads the confirmed selection; returns number of items with qty > 0.
+// Reads the confirmed selection (qty is always 1); returns item count.
 size_t ui_order_get_selection(cms_order_item_t *out, size_t max, bool *pay_points);
 
 // Formats cents as e.g. "1.250 МКД" (or "12,50 МКД" when there are cents).

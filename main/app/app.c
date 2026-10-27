@@ -3,6 +3,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "drivers/audio.h"
 #include "cms/cms.h"
@@ -13,22 +14,38 @@
 
 static const char *TAG = "app";
 
+// Auto-logout an authed session after this much combined inactivity (no
+// touch AND no machine activity). Protects a balance whose owner walked
+// away — the card no longer has to stay on the reader.
+#define APP_IDLE_LOGOUT_US  (5 * 60 * 1000000LL)
+// The card must sit on the reader this long before auth is requested, so a
+// quick accidental tap does nothing. Marked by three rising tones spread
+// evenly across the window.
+#define APP_CARD_HOLD_US    (1500 * 1000LL)
+#define APP_HOLD_BEEPS      3
+
 // Funds-transfer chain: CMS debit (hold) -> SAS AFT -> CMS commit.
+// Cashout chain:        SAS AFT from machine -> CMS credit.
 // Money safety rules:
 //   - AFT failed  -> rollback the CMS hold (retry up to 3x).
 //   - AFT succeeded but commit unanswered -> NEVER rollback; retry commit
 //     until the CMS confirms (commit is idempotent by txn).
+//   - Cashout AFT succeeded -> the credits are off the machine; retry the
+//     CMS credit until confirmed (credit is idempotent by txn).
 typedef enum {
     XFER_NONE,
     XFER_DEBIT,     // waiting for debit_res
     XFER_AFT,       // waiting for SAS AFT result
     XFER_COMMIT,    // waiting for debit_commit_res (retries forever)
     XFER_ROLLBACK,  // waiting for debit_rollback_res (retries 3x)
+    XFER_CASHOUT,   // waiting for the SAS AFT-from-machine result
+    XFER_CREDIT,    // waiting for credit_res (retries forever)
 } xfer_state_t;
 
 static QueueHandle_t s_queue;
 static app_state_t s_state = ST_IDLE;
 static player_info_t s_player;
+static char s_auth_uid[32];         // card that opened (or is opening) the session
 static bool s_cms_link;
 static bool s_sas_link;
 
@@ -36,15 +53,19 @@ static xfer_state_t s_xfer = XFER_NONE;
 static char s_xfer_txn[24];
 static uint64_t s_xfer_amount;
 static int s_rollback_retries;
-static bool s_logout_pending;
 
 static bool s_menu_requested;
 static bool s_order_pending;
+
+static int64_t s_last_sas_activity_us;
+static int64_t s_hold_start_us;
+static int s_hold_beeps;
 
 static const char *state_name(app_state_t st)
 {
     switch (st) {
     case ST_IDLE:           return "IDLE";
+    case ST_HOLDING:        return "HOLDING";
     case ST_AUTHENTICATING: return "AUTHENTICATING";
     case ST_AUTHED:         return "AUTHED";
     }
@@ -80,26 +101,20 @@ static void end_session(void)
     ui_order_close();
     ui_hide_spinner();
     memset(&s_player, 0, sizeof(s_player));
+    s_auth_uid[0] = '\0';
     s_menu_requested = false;
     s_order_pending = false;
-    s_logout_pending = false;
     set_state(ST_IDLE);
     ui_show_idle();
 }
 
-// Called when a transfer chain fully resolves (success or failure).
+// Called when a transfer/cashout chain fully resolves (success or failure).
 static void finish_transfer(void)
 {
     s_xfer = XFER_NONE;
     s_xfer_txn[0] = '\0';
     ui_transfer_close();
-    if (s_logout_pending) {
-        ESP_LOGI(TAG, "deferred logout after transfer resolution");
-        if (s_player.sid[0]) {
-            cms_logout(s_player.sid, "card_removed");
-        }
-        end_session();
-    }
+    ui_hide_spinner();
 }
 
 // ---------------------------------------------------------------- card
@@ -108,38 +123,45 @@ static void handle_card_present(const char *uid)
 {
     ESP_LOGI(TAG, "card present, uid=%s (state=%s)", uid, state_name(s_state));
     if (s_state != ST_IDLE) {
+        // Sessions survive card removal; a tap can't displace one. It ends
+        // via ИСПЛАТИ, a CMS logout push or the inactivity timeout.
+        audio_play(CUE_SCAN);
+        bool same = uid[0] && strcmp(uid, s_auth_uid) == 0;
+        ui_toast(same ? "Веќе сте најавени" : "Активна е друга сесија", false);
         return;
     }
-    audio_play(CUE_SCAN);
+    audio_play(CUE_HOLD1); // tone 1 of the hold countdown
     if (!s_cms_link || uid[0] == '\0') {
         ui_toast("Нема врска со системот", false);
         audio_play(CUE_ERROR);
         return;
     }
-    if (cms_auth(uid) != ESP_OK) {
-        ui_toast("Грешка при најава", false);
-        audio_play(CUE_ERROR);
-        return;
-    }
-    set_state(ST_AUTHENTICATING);
-    ui_show_spinner("Проверка на картичката…");
+    // Auth is NOT requested yet: the card must survive the hold window
+    // first (app_tick sends it).
+    snprintf(s_auth_uid, sizeof(s_auth_uid), "%s", uid);
+    set_state(ST_HOLDING);
+    s_hold_start_us = esp_timer_get_time();
+    s_hold_beeps = 1;
+    ui_show_spinner("Држете ја картичката...");
 }
 
 static void handle_card_removed(void)
 {
     ESP_LOGI(TAG, "card removed (state=%s, xfer=%d)", state_name(s_state), s_xfer);
-    if (s_state == ST_IDLE) {
+    if (s_state == ST_HOLDING) {
+        // Removed before the hold window elapsed: no auth was requested.
+        end_session();
+        ui_toast("Држете ја картичката подолго", false);
+        audio_play(CUE_ERROR);
         return;
     }
-    if (s_xfer != XFER_NONE) {
-        // Never abort a money chain mid-flight; resolve first, then log out.
-        s_logout_pending = true;
-        return;
+    if (s_state == ST_AUTHENTICATING) {
+        // The card must stay on the reader until auth completes.
+        end_session();
+        ui_toast("Картичката е тргната предвреме", false);
+        audio_play(CUE_ERROR);
     }
-    if (s_player.sid[0]) {
-        cms_logout(s_player.sid, "card_removed");
-    }
-    end_session();
+    // ST_AUTHED: the session lives on without the card.
 }
 
 // ---------------------------------------------------------------- auth
@@ -162,7 +184,9 @@ static void handle_auth_res(const cms_event_t *ev)
     s_player.balance = ev->balance_valid ? ev->balance : 0;
     s_player.points = ev->points_valid ? ev->points : 0;
     set_state(ST_AUTHED);
+    s_last_sas_activity_us = esp_timer_get_time(); // fresh 5-min idle window
     ui_show_main(&s_player);
+    ui_toast("Може да ја тргнете картичката", true);
     audio_play(CUE_AUTH_OK);
 }
 
@@ -178,7 +202,7 @@ void app_on_ui_order_open(void)
         return;
     }
     s_menu_requested = true;
-    ui_show_spinner("Вчитување на менито…");
+    ui_show_spinner("Вчитување на менито...");
 }
 
 static void handle_menu_res(const cms_event_t *ev)
@@ -216,7 +240,7 @@ void app_on_ui_order_confirm(void)
     }
     s_order_pending = true;
     ui_order_close();
-    ui_show_spinner("Нарачката се испраќа…");
+    ui_show_spinner("Нарачката се испраќа...");
 }
 
 static void handle_order_res(const cms_event_t *ev)
@@ -264,7 +288,7 @@ void app_on_ui_transfer_confirm(uint64_t amount_cents)
     s_xfer = XFER_DEBIT;
     s_xfer_amount = amount_cents;
     s_rollback_retries = 0;
-    ui_transfer_progress("Резервација на средствата…");
+    ui_transfer_progress("Резервација на средствата...");
     ESP_LOGI(TAG, "transfer start: %llu cents, txn %s",
              (unsigned long long)amount_cents, s_xfer_txn);
 }
@@ -291,31 +315,62 @@ static void handle_debit_res(const cms_event_t *ev)
         ui_update_balance(s_player.balance, s_player.points);
     }
     s_xfer = XFER_AFT;
-    ui_transfer_progress("Префрлање на автоматот…");
+    ui_transfer_progress("Префрлање на автоматот...");
     if (sas_aft_transfer(s_xfer_amount, s_xfer_txn) != ESP_OK) {
         ESP_LOGW(TAG, "AFT not accepted, rolling back txn %s", s_xfer_txn);
         s_xfer = XFER_ROLLBACK;
-        ui_transfer_progress("Враќање на средствата…");
+        ui_transfer_progress("Враќање на средствата...");
         cms_rollback(s_xfer_txn, "aft_unavailable");
     }
 }
 
 static void handle_aft_result(const sas_event_t *ev)
 {
-    if (s_xfer != XFER_AFT || !txn_matches(ev->txn)) {
+    if (!txn_matches(ev->txn)) {
         return;
     }
-    if (ev->ok) {
-        s_xfer = XFER_COMMIT;
-        ui_transfer_progress("Финализирање…");
-        cms_commit(s_xfer_txn);
+    if (s_xfer == XFER_AFT) {
+        if (ev->ok) {
+            s_xfer = XFER_COMMIT;
+            ui_transfer_progress("Финализирање...");
+            cms_commit(s_xfer_txn);
+            return;
+        }
+        ESP_LOGW(TAG, "AFT failed (status %02X), rolling back txn %s",
+                 ev->aft_status, s_xfer_txn);
+        s_xfer = XFER_ROLLBACK;
+        ui_transfer_progress("Враќање на средствата...");
+        cms_rollback(s_xfer_txn, "aft_failed");
         return;
     }
-    ESP_LOGW(TAG, "AFT failed (status %02X), rolling back txn %s",
-             ev->aft_status, s_xfer_txn);
-    s_xfer = XFER_ROLLBACK;
-    ui_transfer_progress("Враќање на средствата…");
-    cms_rollback(s_xfer_txn, "aft_failed");
+    if (s_xfer != XFER_CASHOUT) {
+        return;
+    }
+    if (!ev->ok) {
+        // Nothing left the machine.
+        ESP_LOGW(TAG, "cashout AFT failed (status %02X), txn %s",
+                 ev->aft_status, s_xfer_txn);
+        finish_transfer();
+        ui_toast("Исплатата не успеа", false);
+        audio_play(CUE_ERROR);
+        return;
+    }
+    if (ev->credits_cents == 0) {
+        // Machine was empty: nothing to credit, just close the session.
+        ESP_LOGI(TAG, "cashout: machine empty, logging out (txn %s)", s_xfer_txn);
+        finish_transfer();
+        if (s_player.sid[0]) {
+            cms_logout(s_player.sid, "cashout");
+        }
+        end_session();
+        ui_toast("Одјавени сте", false);
+        return;
+    }
+    // The credits are off the machine — the CMS credit MUST land now.
+    s_xfer = XFER_CREDIT;
+    s_xfer_amount = ev->credits_cents;
+    ui_show_spinner("Ажурирање на салдото...");
+    cms_credit(s_player.sid, s_xfer_amount, s_xfer_txn);
 }
 
 static void handle_commit_res(const cms_event_t *ev)
@@ -356,6 +411,65 @@ static void handle_commit_res(const cms_event_t *ev)
     finish_transfer();
 }
 
+// ---------------------------------------------------------------- cashout
+
+void app_on_ui_cashout(void)
+{
+    if (s_state != ST_AUTHED || s_xfer != XFER_NONE) {
+        return;
+    }
+    if (!s_sas_link) {
+        ui_toast("Автоматот не е поврзан", false);
+        audio_play(CUE_ERROR);
+        return;
+    }
+    cms_make_txn(s_xfer_txn);
+    if (sas_aft_cashout(s_xfer_txn) != ESP_OK) {
+        s_xfer_txn[0] = '\0';
+        ui_toast("Исплатата не успеа", false);
+        audio_play(CUE_ERROR);
+        return;
+    }
+    s_xfer = XFER_CASHOUT;
+    s_xfer_amount = 0;
+    ui_show_spinner("Исплата од автоматот...");
+    ESP_LOGI(TAG, "cashout start: txn %s", s_xfer_txn);
+}
+
+static void handle_credit_res(const cms_event_t *ev)
+{
+    if (s_xfer != XFER_CREDIT || !txn_matches(ev->txn)) {
+        return;
+    }
+    if (!ev->ok) {
+        if (strcmp(ev->err_code, "timeout") == 0) {
+            // The machine already gave up the credits: never drop this.
+            ESP_LOGW(TAG, "credit timeout for %s, retrying", s_xfer_txn);
+            cms_credit(s_player.sid, s_xfer_amount, s_xfer_txn);
+            return;
+        }
+        // The CMS actively refused an idempotent credit: needs staff.
+        ESP_LOGE(TAG, "CREDIT REFUSED for txn %s amount %llu: %s/%s",
+                 s_xfer_txn, (unsigned long long)s_xfer_amount,
+                 ev->err_code, ev->err_msg);
+        finish_transfer();
+        ui_toast("Грешка — контактирајте персонал", false);
+        audio_play(CUE_ERROR);
+        return;
+    }
+    char amount[32], msg[80];
+    ui_fmt_money(amount, sizeof(amount), s_xfer_amount, "МКД");
+    snprintf(msg, sizeof(msg), "Исплатени %s", amount);
+    ESP_LOGI(TAG, "cashout complete: txn %s", s_xfer_txn);
+    finish_transfer();
+    if (s_player.sid[0]) {
+        cms_logout(s_player.sid, "cashout");
+    }
+    end_session();
+    ui_toast(msg, true);
+    audio_play(CUE_TRANSFER_OK);
+}
+
 static void handle_rollback_res(const cms_event_t *ev)
 {
     if (s_xfer != XFER_ROLLBACK || !txn_matches(ev->txn)) {
@@ -390,10 +504,13 @@ static void handle_cms_link(bool up)
     s_cms_link = up;
     update_offline_badge();
     if (up) {
-        // A commit may be waiting out a link outage.
+        // A commit/credit may be waiting out a link outage.
         if (s_xfer == XFER_COMMIT) {
             ESP_LOGI(TAG, "CMS link back, re-sending commit for %s", s_xfer_txn);
             cms_commit(s_xfer_txn);
+        } else if (s_xfer == XFER_CREDIT) {
+            ESP_LOGI(TAG, "CMS link back, re-sending credit for %s", s_xfer_txn);
+            cms_credit(s_player.sid, s_xfer_amount, s_xfer_txn);
         }
         return;
     }
@@ -402,7 +519,12 @@ static void handle_cms_link(bool up)
     }
     if (s_xfer == XFER_COMMIT) {
         // AFT already succeeded — hold the session until the commit lands.
-        ui_transfer_progress("Финализирање… (нема врска)");
+        ui_transfer_progress("Финализирање... (нема врска)");
+        return;
+    }
+    if (s_xfer == XFER_CREDIT) {
+        // Same for a cashout credit: the machine already paid out.
+        ui_show_spinner("Ажурирање на салдото... (нема врска)");
         return;
     }
     if (s_xfer != XFER_NONE) {
@@ -442,6 +564,9 @@ static void handle_cms_event(const cms_event_t *ev)
     case CMS_EVT_ROLLBACK_RES:
         handle_rollback_res(ev);
         break;
+    case CMS_EVT_CREDIT_RES:
+        handle_credit_res(ev);
+        break;
     case CMS_EVT_BALANCE_PUSH:
         if (s_state == ST_AUTHED) {
             if (ev->balance_valid) {
@@ -477,9 +602,12 @@ static void handle_sas_event(const sas_event_t *ev)
         handle_aft_result(ev);
         break;
     case SAS_EVT_EXCEPTION:
+        // Machine activity (game start/end etc.) keeps the session alive.
+        s_last_sas_activity_us = esp_timer_get_time();
         ESP_LOGI(TAG, "EGM exception %02X", ev->exception);
         break;
     case SAS_EVT_CREDITS:
+        s_last_sas_activity_us = esp_timer_get_time();
         ESP_LOGI(TAG, "EGM credits: %llu cents", (unsigned long long)ev->credits_cents);
         break;
     }
@@ -516,4 +644,40 @@ void app_tick(void)
         app_handle_event(&e);
     }
     cms_tick();
+
+    int64_t now = esp_timer_get_time();
+
+    // Hold window: three rising tones spread across it, then request auth
+    // once the card has stayed on the reader the whole time.
+    if (s_state == ST_HOLDING) {
+        if (s_hold_beeps < APP_HOLD_BEEPS &&
+            now - s_hold_start_us >=
+                (int64_t)s_hold_beeps * (APP_CARD_HOLD_US / APP_HOLD_BEEPS)) {
+            audio_play((audio_cue_t)(CUE_HOLD1 + s_hold_beeps));
+            s_hold_beeps++;
+        }
+        if (now - s_hold_start_us >= APP_CARD_HOLD_US) {
+            if (cms_auth(s_auth_uid) != ESP_OK) {
+                end_session();
+                ui_toast("Грешка при најава", false);
+                audio_play(CUE_ERROR);
+            } else {
+                set_state(ST_AUTHENTICATING);
+            }
+        }
+    }
+
+    // Walk-away protection: quiet authed session -> logout. Never while a
+    // money chain or a pending menu/order request is in flight.
+    if (s_state == ST_AUTHED && s_xfer == XFER_NONE &&
+        !s_menu_requested && !s_order_pending &&
+        ui_touch_idle_ms() > APP_IDLE_LOGOUT_US / 1000 &&
+        now - s_last_sas_activity_us > APP_IDLE_LOGOUT_US) {
+        ESP_LOGI(TAG, "inactivity logout (sid %s)", s_player.sid);
+        if (s_player.sid[0]) {
+            cms_logout(s_player.sid, "inactivity");
+        }
+        end_session();
+        ui_toast("Одјавени сте", false);
+    }
 }

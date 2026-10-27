@@ -15,6 +15,7 @@ typedef enum {
     CMS_EVT_DEBIT_RES,
     CMS_EVT_COMMIT_RES,
     CMS_EVT_ROLLBACK_RES,
+    CMS_EVT_CREDIT_RES,     // cashout deposit (machine credits -> card)
     CMS_EVT_MENU_RES,       // menu itself is cached in the cms module
     CMS_EVT_ORDER_RES,
     CMS_EVT_BALANCE_PUSH,

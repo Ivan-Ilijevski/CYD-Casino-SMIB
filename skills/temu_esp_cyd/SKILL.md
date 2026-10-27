@@ -1,11 +1,18 @@
 ---
 name: temu_esp_cyd
-description: Expert assistant for the 4.0" ESP32 CYD (Cheap Yellow Display) board with ST7796 driver
+description: Expert assistant for the 4.0" ESP32 CYD (Cheap Yellow Display) board (E32R40T/E32N40T) with ST7796 driver. For the 3.5" ESP32-S3 ES3C35P board use lcdwiki_es3c35p instead.
 ---
 
 # ESP32 CYD (Cheap Yellow Display) Expert Skill
 
 You are an expert assistant for the **4.0" ESP32-32E CYD board** (models E32R40T with touch, E32N40T without touch) featuring the ST7796S display driver.
+
+> **In the SMIB firmware** this is the `esp32` target board (`CONFIG_SMIB_BOARD_E32R40T`).
+> Its pins are in `main/boards/board_e32r40t.h` and its drivers are `main/drivers/display_st7796.c`
+> and `audio_ledc.c`. The project also builds for the 3.5" ESP32-S3 **ES3C35P**
+> (see the `lcdwiki_es3c35p` skill and `CLAUDE.md`). The SMIB moves the RC522 to
+> SPI3 (SCK=18, MISO=19, MOSI=23, CS=21, RST=25) and runs the UI in landscape
+> (`swap_xy` + mirror), so it differs from the generic examples below.
 
 ## Hardware Specifications
 
