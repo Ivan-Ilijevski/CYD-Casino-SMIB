@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "drivers/settings.h"
+
 typedef enum {
     ST_IDLE,            // unauthenticated: logo + card prompt
     ST_HOLDING,         // card present, waiting out the 3 s hold window
@@ -23,3 +25,13 @@ void app_on_ui_order_confirm(void); // order details read from the ui_order modu
 void app_on_ui_order_open(void);
 void app_on_ui_order_status_open(void); // the main-screen ring badge was tapped
 void app_on_ui_cashout(void);       // machine credits -> card, then logout
+
+// True when the terminal may change where its money messages go: no funds
+// transfer in flight. Dropping the CMS socket mid-commit is exactly what
+// "Funds-transfer safety" in the README forbids.
+bool app_can_change_network(void);
+
+// Admin panel save: persists the settings, then re-points the radio and the
+// CMS socket at them. Returns false (having toasted why) when a money chain is
+// running or the write failed, so the panel can keep the fields on screen.
+bool app_on_ui_admin_save(const smib_settings_t *s);

@@ -7,9 +7,9 @@
 #include "cJSON.h"
 
 #include "board.h"
-#include "mux/mux.h"
 #include "app/app_events.h"
 #include "cms.h"
+#include "cms_link.h"
 
 static const char *TAG = "cms";
 
@@ -52,7 +52,7 @@ static esp_err_t send_json(cJSON *root)
     }
     size_t len = strlen(text);
     esp_err_t err = len <= MUX_MAX_PAYLOAD
-                        ? mux_send(MUX_CH_CMS, (const uint8_t *)text, (uint16_t)len)
+                        ? cms_link_send((const uint8_t *)text, (uint16_t)len)
                         : ESP_ERR_INVALID_SIZE;
     cJSON_free(text);
     return err;
@@ -460,19 +460,22 @@ void cms_tick(void)
 {
     int64_t now = esp_timer_get_time();
 
-    // Keepalive
-    if (now - s_last_ping_us > CMS_PING_PERIOD_US) {
+    // Keepalive. Skipped while the socket is down: the link task is busy
+    // reconnecting and a send would only fail.
+    if (cms_link_connected() && now - s_last_ping_us > CMS_PING_PERIOD_US) {
         s_last_ping_us = now;
         cJSON *d;
         cJSON *root = make_envelope("ping", s_next_id++, &d);
         send_json(root);
     }
 
-    // Link edges
+    // Link edges. The socket state short-circuits the pong timeout so a
+    // dropped connection shows the offline badge at once instead of six
+    // seconds later.
     xSemaphoreTake(s_lock, portMAX_DELAY);
     int64_t last_rx = s_last_rx_us;
     xSemaphoreGive(s_lock);
-    bool up = (now - last_rx) < CMS_LINK_TIMEOUT_US;
+    bool up = cms_link_connected() && (now - last_rx) < CMS_LINK_TIMEOUT_US;
     if (up != s_link_up) {
         s_link_up = up;
         ESP_LOGI(TAG, "CMS link %s", up ? "up" : "down");
@@ -521,5 +524,5 @@ esp_err_t cms_init(void)
     if (!s_lock) {
         return ESP_ERR_NO_MEM;
     }
-    return mux_register_rx(MUX_CH_CMS, cms_rx_cb, NULL);
+    return cms_link_register_rx(cms_rx_cb, NULL);
 }

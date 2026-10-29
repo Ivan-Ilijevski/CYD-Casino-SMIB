@@ -6,7 +6,11 @@
 #include "esp_timer.h"
 
 #include "drivers/audio.h"
+#include "drivers/door.h"
+#include "drivers/net.h"
+#include "drivers/settings.h"
 #include "cms/cms.h"
+#include "cms/cms_link.h"
 #include "sas/sas.h"
 #include "ui/ui.h"
 #include "app_events.h"
@@ -89,6 +93,10 @@ static void order_clear(void);
 static int64_t s_last_sas_activity_us;
 static int64_t s_hold_start_us;
 static int s_hold_beeps;
+
+// Cabinet door, polled in app_tick. Starts "shut" so the first poll after boot
+// reports an edge if it is actually open.
+static bool s_door_open;
 
 static const char *state_name(app_state_t st)
 {
@@ -661,6 +669,46 @@ static void handle_cms_link(bool up)
     ui_toast("Врската со системот е изгубена", false);
 }
 
+// ---------------------------------------------------------------- admin
+
+bool app_can_change_network(void)
+{
+    return s_xfer == XFER_NONE;
+}
+
+bool app_on_ui_admin_save(const smib_settings_t *s)
+{
+    // The money rules come first: a commit or a cashout credit that has
+    // already left the machine must not lose its transport mid-retry.
+    if (!app_can_change_network()) {
+        ESP_LOGW(TAG, "admin save refused: transfer in flight (xfer=%d)", s_xfer);
+        ui_toast("Трансакција во тек, обидете се повторно", false);
+        return false;
+    }
+    if (settings_save(s) != ESP_OK) {
+        ui_toast("Зачувувањето не успеа", false);
+        audio_play(CUE_ERROR);
+        return false;
+    }
+    ESP_LOGI(TAG, "admin applied: ssid '%s', cms %s:%u",
+             s->wifi_ssid, s->cms_host, (unsigned)s->cms_port);
+    net_connect(s->wifi_ssid, s->wifi_pass);
+    cms_link_set_endpoint(s->cms_host, s->cms_port);
+    return true;
+}
+
+// Cabinet door edges. Closing the cabinet also closes the panel, so the
+// terminal can't be left sitting on the configuration screen.
+static void handle_door(bool open)
+{
+    s_door_open = open;
+    ESP_LOGI(TAG, "cabinet door %s", open ? "OPEN" : "shut");
+    ui_set_door_open(open);
+    if (!open) {
+        ui_admin_close();
+    }
+}
+
 // ---------------------------------------------------------------- dispatch
 
 static void handle_cms_event(const cms_event_t *ev)
@@ -776,6 +824,11 @@ void app_tick(void)
         app_handle_event(&e);
     }
     cms_tick();
+
+    bool door = door_is_open();
+    if (door != s_door_open) {
+        handle_door(door);
+    }
 
     int64_t now = esp_timer_get_time();
 

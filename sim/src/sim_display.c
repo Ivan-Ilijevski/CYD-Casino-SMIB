@@ -121,6 +121,7 @@ static void on_key(SDL_Keycode key, bool down)
     case SDLK_2: case SDLK_KP_2: sim_nfc_key(1, down); return;
     case SDLK_3: case SDLK_KP_3: sim_nfc_key(2, down); return;
     case SDLK_f: sim_nfc_flaky(down); return;
+    case SDLK_d: sim_door_key(down); return;
     default: break;
     }
     if (!down) {

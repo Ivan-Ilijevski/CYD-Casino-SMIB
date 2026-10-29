@@ -1,5 +1,5 @@
-// CMS client: JSON request/response over mux channel 0x02, relayed by the
-// slot-machine host app to the CMS backend.
+// CMS client: JSON request/response straight to the CMS backend over Wi-Fi
+// (cms_link.c owns the socket; the frame format is still the mux one).
 //
 // All requests are async; results arrive as APP_EVT_CMS events (including
 // timeouts, which surface as ok=false with err_code "timeout").

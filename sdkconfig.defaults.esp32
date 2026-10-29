@@ -1,2 +1,21 @@
 # E32R40T (4.0" ESP32-32E CYD). Merged after sdkconfig.defaults for esp32.
 CONFIG_SMIB_BOARD_E32R40T=y
+# The E32R40T module carries 4 MB of flash (the IDF default assumes 2 MB),
+# which the 2 MB app slot in partitions.csv needs.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Wi-Fi memory trim. This board has 520 KB of SRAM and NO PSRAM, and LVGL's
+# draw buffers already live there, so the stock Wi-Fi buffer counts (sized for
+# streaming throughput) leave too little heap. The CMS link carries small JSON
+# request/response messages a few times a second -- throughput is irrelevant
+# here, headroom is not. The ES3C35P keeps the defaults: it has 8 MB of PSRAM.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+# Aggregation only pays off for bulk transfers, and each direction's
+# reorder/retry bookkeeping costs several KB.
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
+# One CMS socket, plus headroom. The default 10 over-allocates lwip control
+# blocks for a device that opens exactly one connection.
+CONFIG_LWIP_MAX_SOCKETS=4

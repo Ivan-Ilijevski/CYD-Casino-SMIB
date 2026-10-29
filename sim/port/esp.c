@@ -8,8 +8,10 @@
 
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "lvgl.h"
 #include "sim.h"
 
 #ifndef CONFIG_LOG_DEFAULT_LEVEL
@@ -94,6 +96,24 @@ void esp_log_write(esp_log_level_t level, const char *tag, const char *format, .
     va_start(args, format);
     s_vprintf(format, args);
     va_end(args);
+}
+
+// ---------------------------------------------------------------- system
+
+// The host's heap says nothing useful about the board, so report LVGL's pool,
+// whose size does come from the firmware's sdkconfig.
+uint32_t esp_get_free_heap_size(void)
+{
+    lv_mem_monitor_t mon;
+    lv_mem_monitor(&mon);
+    return (uint32_t)mon.free_size;
+}
+
+void esp_restart(void)
+{
+    sim_reset();
+    // sim_reset() execs on success; reaching here means it failed.
+    sim_exit(1);
 }
 
 // ---------------------------------------------------------------- err

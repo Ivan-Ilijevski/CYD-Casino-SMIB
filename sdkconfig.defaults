@@ -10,3 +10,7 @@ CONFIG_FREERTOS_HZ=1000
 CONFIG_LV_FONT_MONTSERRAT_28=y
 # Bigger ASCII digits still, for the minutes inside the order countdown ring.
 CONFIG_LV_FONT_MONTSERRAT_48=y
+# 2 MB app slot (partitions.csv): Wi-Fi + lwip + mbedtls push the image past
+# the 1 MB stock layout, and SINGLE_APP_LARGE's 1.5 MB leaves no headroom.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"

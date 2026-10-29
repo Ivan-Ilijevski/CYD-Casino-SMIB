@@ -38,6 +38,12 @@
 #define PIN_NUM_I2S_DOUT    15   // ESP -> codec DSDIN
 #define PIN_NUM_I2S_DIN     16   // codec ASDOUT -> ESP (mic, unused)
 
+// --- Cabinet door switch (gates the admin panel; see drivers/door.h) ---
+// IO46 is one of the two GPIOs this board leaves free on a header. It is a
+// strapping pin, but only for ROM-log printing, so either boot level is
+// harmless -- and the switch is an input, never driven.
+#define PIN_NUM_DOOR        46
+
 // --- Display params (landscape; the panel is 320x480 portrait natively) ---
 #define LCD_H_RES           480
 #define LCD_V_RES           320

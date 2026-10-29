@@ -56,6 +56,15 @@ bool sim_nfc_command(const char *arg);    // ctl "card ..."
 void sim_nfc_release_all(void);           // window lost focus
 const char *sim_nfc_status(void);
 
+// sim_net.c (app/LVGL thread)
+bool sim_net_command(const char *arg);    // ctl "wifi up|down"
+const char *sim_net_status(void);
+
+// sim_door.c (app/LVGL thread)
+void sim_door_key(bool down);             // D held = cabinet door open
+bool sim_door_command(const char *arg);   // ctl "door open|closed"
+const char *sim_door_status(void);
+
 // sim_audio.c
 void sim_audio_toggle_mute(void);
 

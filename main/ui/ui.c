@@ -11,6 +11,7 @@ static lv_obj_t *s_scr_order_status;
 
 // Top-layer overlays
 static lv_obj_t *s_offline_badge;
+static lv_obj_t *s_door_banner;
 static lv_obj_t *s_spinner_backdrop;
 static lv_obj_t *s_spinner_label;
 static lv_obj_t *s_toast;
@@ -86,6 +87,52 @@ static void build_offline_badge(void)
     lv_obj_add_flag(s_offline_badge, LV_OBJ_FLAG_HIDDEN);
 }
 
+#define DOOR_BANNER_H 36
+
+static void door_admin_cb(lv_event_t *e)
+{
+    (void)e;
+    ui_admin_open();
+}
+
+// A bar across the top rather than a corner badge: an open cabinet on a
+// machine handling money should be impossible to miss, and the ADMIN button
+// needs a real touch target. Gold, not the offline badge's red — this is a
+// state staff created on purpose, not a fault.
+static void build_door_banner(void)
+{
+    s_door_banner = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(s_door_banner);
+    lv_obj_set_size(s_door_banner, LV_PCT(100), DOOR_BANNER_H);
+    lv_obj_align(s_door_banner, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_color(s_door_banner, UI_COL_ACCENT, 0);
+    lv_obj_set_style_bg_opa(s_door_banner, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(s_door_banner, LV_OBJ_FLAG_SCROLLABLE);
+    // Not clickable: only the button below should take touches, so the rest of
+    // the strip doesn't swallow taps meant for the screen underneath.
+    lv_obj_remove_flag(s_door_banner, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *lbl = lv_label_create(s_door_banner);
+    lv_obj_set_style_text_font(lbl, &Sf_Compact_14, 0);
+    lv_obj_set_style_text_color(lbl, UI_COL_ON_ACCENT, 0);
+    lv_label_set_text(lbl, "ВРАТАТА Е ОТВОРЕНА");
+    lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 10, 0);
+
+    lv_obj_t *btn = lv_button_create(s_door_banner);
+    lv_obj_set_size(btn, 110, 28);
+    lv_obj_align(btn, LV_ALIGN_RIGHT_MID, -6, 0);
+    lv_obj_set_style_bg_color(btn, UI_COL_BG, 0);
+    lv_obj_add_event_cb(btn, door_admin_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *btn_lbl = lv_label_create(btn);
+    lv_obj_set_style_text_font(btn_lbl, &Sf_Compact_14, 0);
+    lv_obj_set_style_text_color(btn_lbl, UI_COL_ACCENT, 0);
+    lv_label_set_text(btn_lbl, "АДМИН");
+    lv_obj_center(btn_lbl);
+
+    lv_obj_add_flag(s_door_banner, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void build_spinner(void)
 {
     s_spinner_backdrop = lv_obj_create(lv_layer_top());
@@ -151,6 +198,9 @@ void ui_init(void)
     s_scr_order_status = ui_order_status_create();
 
     build_offline_badge();
+    // After the badge so the banner draws above it, and before the spinner and
+    // toast so those still cover the banner.
+    build_door_banner();
     build_spinner();
     build_toast();
 }
@@ -207,6 +257,18 @@ void ui_set_offline(bool offline)
     } else {
         lv_obj_add_flag(s_offline_badge, LV_OBJ_FLAG_HIDDEN);
     }
+}
+
+void ui_set_door_open(bool open)
+{
+    if (open) {
+        lv_obj_remove_flag(s_door_banner, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_door_banner, LV_OBJ_FLAG_HIDDEN);
+    }
+    // Drop the offline badge below the banner rather than letting the banner
+    // hide it: both states matter to whoever opened the cabinet.
+    lv_obj_align(s_offline_badge, LV_ALIGN_TOP_RIGHT, -6, open ? DOOR_BANNER_H + 6 : 6);
 }
 
 void ui_show_spinner(const char *text)

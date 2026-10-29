@@ -14,7 +14,12 @@ dependencies:
   #   # `public` flag doesn't have an effect dependencies of the `main` component.
   #   # All dependencies of `main` are public by default.
   #   public: true
-  lvgl/lvgl: '*'
+  # Pinned, not '*'. Both targets share one managed_components/ directory, so an
+  # unpinned LVGL let whichever target built last decide the version for the
+  # other and for the desktop sim (which reads managed_components/ directly).
+  # That is how the esp32 lock ended up on 9.5.0 while the esp32s3 lock said
+  # 9.6.0~1, and how a 9.6 install silently broke the sim's build.
+  lvgl/lvgl: '~9.5.0'
   abobija/rc522: "^3.4.3"
   # Board-specific drivers, pulled in only for the target that uses them
   # (E32R40T = esp32, ES3C35P = esp32s3; see Kconfig.projbuild).

@@ -1,0 +1,16 @@
+# SMIB partition table, both targets.
+#
+# The stock single-app layout gives the app 1 MB, which the firmware outgrew
+# when the CMS channel moved to Wi-Fi: esp_wifi + lwip + mbedtls add roughly
+# 470 KB of flash, taking the image past 1.4 MB. SINGLE_APP_LARGE's 1.5 MB
+# would fit it today with only ~50 KB spare, which is not enough room to add
+# anything later, so the app slot is 2 MB here.
+#
+# Both boards have room for it: the E32R40T has 4 MB of flash and the ES3C35P
+# has 16 MB. Everything past 0x210000 is left unallocated, which is where an
+# OTA layout would go if the Wi-Fi link is ever used for updates.
+#
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x6000,
+phy_init,   data, phy,     0xf000,   0x1000,
+factory,    app,  factory, 0x10000,  0x200000,

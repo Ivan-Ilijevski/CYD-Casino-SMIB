@@ -29,6 +29,17 @@ uint32_t ui_touch_idle_ms(void);
 
 // Overlays (live on the top layer, visible over any screen)
 void ui_set_offline(bool offline);
+
+// Cabinet door banner: the text plus the button into the admin panel. On the
+// top layer like the offline badge, so staff reach the panel whatever the
+// terminal is showing and an open cabinet is never invisible.
+void ui_set_door_open(bool open);
+
+// Admin panel. Asks for the passcode first and only builds the configuration
+// once it matches, so an open cabinet alone reveals nothing.
+void ui_admin_open(void);
+void ui_admin_close(void);
+bool ui_admin_is_open(void);
 void ui_show_spinner(const char *text);
 void ui_hide_spinner(void);
 void ui_toast(const char *msg, bool ok); // auto-dismisses after 3 s

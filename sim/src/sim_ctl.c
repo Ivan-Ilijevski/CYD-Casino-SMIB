@@ -3,6 +3,8 @@
 //
 //   card 1|2|3|flaky|<UID>|off put a card on / take it off the reader
 //   tap X Y [MS]               touch the screen at (X, Y) for MS ms (default 100)
+//   door open|closed           cabinet door switch (open = admin banner)
+//   wifi up|down               fake radio; down also parks the CMS socket
 //   shot FILE.bmp              save what the screen shows
 //   mem                        LVGL heap usage
 //   reset                      simulated board reset (like the R key)
@@ -95,6 +97,20 @@ static void run(char *line)
         if (sim_display_screenshot(path)) {
             sim_printf("screenshot saved: %s", path);
         }
+    } else if (strcmp(cmd, "door") == 0) {
+        char *arg = strtok_r(NULL, " \t", &save);
+        if (!arg) {
+            sim_printf("usage: door open|closed");
+            return;
+        }
+        sim_door_command(arg);
+    } else if (strcmp(cmd, "wifi") == 0) {
+        char *arg = strtok_r(NULL, " \t", &save);
+        if (!arg) {
+            sim_printf("usage: wifi up|down");
+            return;
+        }
+        sim_net_command(arg);
     } else if (strcmp(cmd, "mem") == 0) {
         lv_mem_monitor_t mon;
         lv_mem_monitor(&mon);

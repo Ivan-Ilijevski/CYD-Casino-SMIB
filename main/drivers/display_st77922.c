@@ -150,13 +150,18 @@ static void lvgl_flush_cb(lv_display_t *display, const lv_area_t *area, uint8_t 
     int32_t h = lv_area_get_height(area);
 
     // Rotate the strip into panel orientation, then byte-swap for the
-    // big-endian panel (lv_draw_rotate doesn't take RGB565_SWAPPED).
+    // big-endian panel (the rotate doesn't take RGB565_SWAPPED).
+    //
+    // The lv_draw_sw_* spelling rather than LVGL 9.6's lv_draw_* wrappers:
+    // these exist with identical signatures in both 9.5 and 9.6, so this
+    // driver does not pin the whole project (and the desktop sim) to 9.6.
+    // See "Dependencies" in ../../README.md.
     lv_area_t panel_area = *area;
     lv_display_rotate_area(display, &panel_area);
-    lv_draw_rotate(px_map, rot_buf, w, h,
-                   lv_draw_buf_width_to_stride(w, cf), lv_draw_buf_width_to_stride(h, cf),
-                   lv_display_get_rotation(display), cf);
-    lv_draw_rgb565_swap(rot_buf, w * h);
+    lv_draw_sw_rotate(px_map, rot_buf, w, h,
+                      lv_draw_buf_width_to_stride(w, cf), lv_draw_buf_width_to_stride(h, cf),
+                      lv_display_get_rotation(display), cf);
+    lv_draw_sw_rgb565_swap(rot_buf, w * h);
 
     // draw_bitmap only queues the QSPI/DMA transfer; flush_ready is signaled
     // from lcd_trans_done_cb once it completes, so neither buffer is reused

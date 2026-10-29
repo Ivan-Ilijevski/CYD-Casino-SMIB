@@ -24,6 +24,49 @@ def test_mux():
     assert out == [(CH_SAS, bytes([0x81])), (CH_CMS, b'{"t":"ping","id":1,"d":{}}')], out
 
 
+def test_cms_tcp_framing():
+    """The CMS leg is a TCP socket now, so the same frames arrive with TCP's
+    segmentation rather than a UART's: no boot garbage and no lost bytes, but
+    arbitrary coalescing and splitting. The firmware parser (mux_frame.c) runs
+    with its stall timeout disabled for exactly this reason — a partial frame
+    on TCP always completes, so it must never be abandoned."""
+    msgs = [
+        b'{"t":"ping","id":1,"d":{}}',
+        b'{"t":"auth_req","id":2,"d":{"uid":"9C 76 5A F4"}}',
+        # A menu-sized payload: big enough to span several TCP segments.
+        json.dumps({"t": "menu_res", "id": 3,
+                    "d": {"ok": True,
+                          "items": [{"drink": i, "name": f"item-{i}", "price": 12000,
+                                     "avail": True} for i in range(16)]}}).encode(),
+    ]
+    stream = b"".join(frame(CH_CMS, m) for m in msgs)
+
+    # Several frames coalesced into one read.
+    p = MuxParser()
+    assert p.feed(stream) == [(CH_CMS, m) for m in msgs]
+
+    # The same bytes split at every possible boundary, one byte at a time:
+    # no frame may be dropped or duplicated however the segments fall.
+    p = MuxParser()
+    out = []
+    for byte in stream:
+        out += p.feed(bytes([byte]))
+    assert out == [(CH_CMS, m) for m in msgs], out
+
+    # A split landing inside the header and inside the payload.
+    for cut in (1, 2, 3, 4, 5, len(stream) // 2, len(stream) - 1):
+        p = MuxParser()
+        out = p.feed(stream[:cut]) + p.feed(stream[cut:])
+        assert out == [(CH_CMS, m) for m in msgs], (cut, out)
+
+    # A half-written frame (the far end died mid-send) yields nothing and does
+    # not corrupt the next connection's first frame, which starts a new parser.
+    p = MuxParser()
+    assert p.feed(stream[:len(stream) - 3]) == [(CH_CMS, m) for m in msgs[:-1]]
+    p = MuxParser()
+    assert p.feed(frame(CH_CMS, msgs[0])) == [(CH_CMS, msgs[0])]
+
+
 def long_poll(cmd, body=b""):
     return with_crc(bytes([ADDR, cmd]) + body)
 
@@ -229,7 +272,9 @@ def test_order_status():
 
 if __name__ == "__main__":
     test_mux()
+    test_cms_tcp_framing()
     test_egm()
     test_cms()
     test_order_status()
-    print("OK: mux framing, EGM SAS subset, CMS flows, order status all pass")
+    print("OK: mux framing, CMS-over-TCP framing, EGM SAS subset, CMS flows, "
+          "order status all pass")

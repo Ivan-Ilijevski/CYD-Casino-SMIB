@@ -28,6 +28,13 @@
 #define PIN_NUM_AUDIO_EN    4    // amp enable, active LOW
 #define PIN_NUM_AUDIO_DAC   26   // DAC channel 1 output
 
+// --- Cabinet door switch (gates the admin panel; see drivers/door.h) ---
+// IO32 is the I2C peripheral connector's SDA pin, unused here (the RC522 took
+// IO25, that connector's SCL). It is on a 1.25mm connector with GND beside it
+// and supports an internal pull-up, so a bare microswitch needs no resistor.
+// -1 on a board with no door switch.
+#define PIN_NUM_DOOR        32
+
 // --- Display params (landscape) ---
 #define LCD_H_RES           480
 #define LCD_V_RES           320

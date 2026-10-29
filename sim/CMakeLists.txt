@@ -89,9 +89,19 @@ add_executable(smib_sim
   src/sim_audio.c
   src/sim_ctl.c
   src/sim_display.c
+  src/sim_door.c
   src/sim_main.c
-  src/sim_nfc.c)
+  src/sim_net.c
+  src/sim_nfc.c
+  src/sim_settings.c)
 target_include_directories(smib_sim PRIVATE "${FW_DIR}/main" port/include src)
+
+# Admin passcode and the factory Wi-Fi/CMS defaults, from the same ../.env the
+# firmware reads, so the sim's admin panel takes the same code as the board.
+set(SMIB_ENV_DIR "${FW_DIR}")
+include("${FW_DIR}/cmake/smib_env.cmake")
+smib_env_read(SMIB_ENV_DEFS)
+target_compile_definitions(smib_sim PRIVATE ${SMIB_ENV_DEFS})
 target_link_libraries(smib_sim PRIVATE lvgl cjson SDL2::SDL2 Threads::Threads m)
 if(NOT APPLE)
   target_link_libraries(smib_sim PRIVATE util) # openpty

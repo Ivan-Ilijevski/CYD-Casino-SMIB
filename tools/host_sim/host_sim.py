@@ -1,38 +1,32 @@
 #!/usr/bin/env python3
-"""SMIB host simulator: mux splitter + fake EGM (SAS) + fake CMS in one
-process. This is the SMIB's test bench AND the reference for the production
-splitter app (which routes SAS to the real slot game and CMS to the network).
+"""SMIB host simulator: mux splitter + fake EGM (SAS) on the serial link. This
+is the SMIB's SAS test bench AND the reference for the production splitter app.
+
+The CMS is NOT here any more. The terminal reaches it over Wi-Fi, so run the
+fake CMS alongside this and point the board at it (admin panel, or .env):
+
+    python cms_tcp_server.py --port 9020      # the CMS, and the bar console
+
+This process now carries only what is physically on the wire to the machine:
+SAS frames (channel 0x01) and the firmware's logs (channel 0x7F).
 
 Usage:
     python host_sim.py --port /dev/cu.usbserial-XXXX [--baud 115200]
-        [--player "Иван Илиевски"] [--balance 1250000] [--points 340]
-        [--uid "9C 76 5A F4"]      only accept this card (default: any)
-        [--fail-auth]              reject every auth
-        [--fail-debit]             refuse funds holds
         [--aft-status 0x80]        EGM fails AFT transfers -> rollback path
         [--aft-pending N]          EGM stays 'pending' for N interrogates
-        [--drop-commit]            swallow first commit -> retry path
-        [--drop-credit]            swallow first cashout credit -> retry path
-        [--no-cms]                 CMS silent (offline badge test)
         [--sas-verbose]            print every SAS exchange
 
-Type these at the prompt to play the bar staff and drive the order ring:
-    orders                 list the open orders
-    order accept <n> <min> accept order <n>, promising <min> minutes
-    order ready <n>        mark it poured
-    order cancel <n>       cancel and refund it
+The CMS-side fault flags (--fail-auth, --fail-debit, --drop-commit,
+--drop-credit) moved to cms_tcp_server.py, along with the bar console that
+drives the order ring (type `orders` there).
 """
 import argparse
-import json
 import sys
-import threading
-import time
 
 import serial
 
 from mux import CH_CMS, CH_LOG, CH_SAS, MuxParser, frame
 from sas_egm import FakeEgm
-from cms_server import FakeCms, console_loop
 
 
 def parse_args():
@@ -40,17 +34,8 @@ def parse_args():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--port", required=True)
     p.add_argument("--baud", type=int, default=115200)
-    p.add_argument("--player", default="Иван Илијевски")
-    p.add_argument("--balance", type=int, default=1250000)
-    p.add_argument("--points", type=int, default=340)
-    p.add_argument("--uid", default=None)
-    p.add_argument("--fail-auth", action="store_true")
-    p.add_argument("--fail-debit", action="store_true")
     p.add_argument("--aft-status", type=lambda s: int(s, 0), default=0x00)
     p.add_argument("--aft-pending", type=int, default=0)
-    p.add_argument("--drop-commit", action="store_true")
-    p.add_argument("--drop-credit", action="store_true")
-    p.add_argument("--no-cms", action="store_true")
     p.add_argument("--sas-verbose", action="store_true")
     return p.parse_args()
 
@@ -60,9 +45,6 @@ def main():
 
     egm = FakeEgm(aft_status=args.aft_status, aft_pending_polls=args.aft_pending,
                   verbose=args.sas_verbose)
-    cms = FakeCms(player_name=args.player, balance=args.balance, points=args.points,
-                  uid=args.uid, fail_auth=args.fail_auth, fail_debit=args.fail_debit,
-                  drop_commit=args.drop_commit, drop_credit=args.drop_credit)
 
     # Opening the port toggles DTR/RTS, which resets the ESP32 on most CYD
     # boards; expect boot-ROM garbage, the parser resyncs past it.
@@ -77,26 +59,15 @@ def main():
 
     parser = MuxParser()
     print(f"[SIM] listening on {args.port} @ {args.baud} "
-          f"(CMS {'OFF' if args.no_cms else 'on'}, AFT status {args.aft_status:#04x})")
+          f"(SAS + logs; AFT status {args.aft_status:#04x})")
+    print("[SIM] the CMS is over Wi-Fi: run cms_tcp_server.py separately")
 
-    if not args.no_cms:
-        threading.Thread(target=console_loop, args=(cms,), daemon=True).start()
-
-    stats = {"sas": 0, "cms": 0, "log": 0}
-
-    def write_cms(msg):
-        if msg.get("t") != "pong":
-            print(f"[CMS>] {json.dumps(msg, ensure_ascii=False)}")
-        ser.write(frame(CH_CMS, json.dumps(msg, ensure_ascii=False).encode()))
+    stats = {"sas": 0, "log": 0, "cms": 0}
+    warned_cms = False
 
     try:
         while True:
             data = ser.read(4096)
-            # Unsolicited frames (order_push from the bar commands above) are
-            # drained every pass, including the idle ones -- the read times out
-            # after 50 ms, so this is the loop's natural tick.
-            for push in cms.drain_pushes():
-                write_cms(push)
             if not data:
                 continue
             for chan, payload in parser.feed(data):
@@ -113,21 +84,18 @@ def main():
                             print(f"[SAS>] {resp.hex(' ')}")
                         ser.write(frame(CH_SAS, resp))
                 elif chan == CH_CMS:
+                    # Nothing should send CMS over the wire now. Say so once
+                    # rather than silently dropping it: a CMS frame here means
+                    # firmware older than the Wi-Fi port, and it will sit
+                    # waiting for a reply that is never coming.
                     stats["cms"] += 1
-                    if args.no_cms:
-                        continue
-                    try:
-                        msg = json.loads(payload.decode())
-                    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                        print(f"[CMS] bad JSON: {exc}: {payload[:80]!r}")
-                        continue
-                    if msg.get("t") not in ("ping", "hello"):
-                        print(f"[CMS<] {json.dumps(msg, ensure_ascii=False)}")
-                    for reply in cms.handle(msg):
-                        write_cms(reply)
+                    if not warned_cms:
+                        warned_cms = True
+                        print("[SIM] WARNING: a CMS frame arrived on the serial link. "
+                              "This firmware predates the Wi-Fi CMS port, or the mux "
+                              "channels are crossed. Nothing here will answer it.")
     except KeyboardInterrupt:
-        print(f"\n[SIM] frames: {stats}  |  EGM credits {egm.credits / 100:.2f}  |  "
-              f"card balance {cms.balance / 100:.2f}, points {cms.points}")
+        print(f"\n[SIM] frames: {stats}  |  EGM credits {egm.credits / 100:.2f}")
         return 0
 
 

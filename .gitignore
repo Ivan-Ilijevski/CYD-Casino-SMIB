@@ -37,6 +37,7 @@ build_*/
 *.map
 flasher_args.json # Generated in build directory
 sdkconfig.old
+sdkconfig.s3.old
 sdkconfig
 sdkconfig.s3
 
@@ -84,3 +85,6 @@ Desktop.ini
 *.workspace # General workspace files, can be from various tools
 *.suo       # Visual Studio Solution User Options
 *.sln.docstates # Visual Studio
+
+# Build-time secrets (passcode, Wi-Fi, CMS endpoint); .env.example is committed
+.env

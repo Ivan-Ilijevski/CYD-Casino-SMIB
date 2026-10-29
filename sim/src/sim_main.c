@@ -87,9 +87,11 @@ void sim_print_help(void)
     sim_printf("  hold 1 / 2 / 3   card on the reader: player 9C 76 5A F4 / unknown DE AD BE EF /"
                " 2nd player 04 A2 3B 1C");
     sim_printf("  hold F           flaky player card (flickers like one at the edge of range)");
+    sim_printf("  hold D           cabinet door open -> banner + ADMIN button (passcode from .env)");
     sim_printf("  mouse            touch      R reset board   S screenshot   M mute   H help");
-    sim_printf("control FIFO %s: card 1|2|3|flaky|<uid>|off, tap X Y [ms], shot FILE.bmp, mem,"
-               " reset, quit", g_sim.ctl_path);
+    sim_printf("control FIFO %s: card 1|2|3|flaky|<uid>|off, tap X Y [ms],"
+               " door open|closed, wifi up|down, shot FILE.bmp, mem, reset, quit",
+               g_sim.ctl_path);
 }
 
 // ---------------------------------------------------------------- lifecycle
