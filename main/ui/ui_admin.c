@@ -100,6 +100,31 @@ static lv_obj_t *admin_button(lv_obj_t *parent, const char *text, bool primary,
     return btn;
 }
 
+// Shared setup for every field in the panel.
+//
+// The cursor needs both calls. A one-line textarea scrolls itself to keep the
+// cursor in view, so a BLINKING cursor re-scrolls the text by a couple of
+// pixels twice a second -- four fields all jittering at once, which reads as
+// the whole panel wobbling. Killing the blink (anim_duration 0) stops that,
+// and hiding the cursor unless the field is focused keeps the panel from
+// showing four steady carets at rest. ta_event_cb turns the focused one on.
+static void admin_ta_init(lv_obj_t *ta, bool numeric)
+{
+    lv_obj_set_style_text_font(ta, &Sf_Compact_14, 0);
+    lv_obj_set_style_anim_duration(ta, 0, LV_PART_CURSOR);
+    lv_obj_set_style_opa(ta, LV_OPA_TRANSP, LV_PART_CURSOR);
+    // Height from the content, not a fixed 32 px: this 20 px face plus the
+    // theme's padding overflows 32, which quietly made every one-line field
+    // vertically scrollable. That drew a scrollbar which then faded over a few
+    // seconds -- more apparent motion -- and clipped the descenders on "club-ap".
+    lv_obj_set_style_pad_ver(ta, 4, 0); // the theme's default would make the
+                                        // content-sized row too tall to fit
+    lv_obj_set_height(ta, LV_SIZE_CONTENT);
+    lv_obj_set_scrollbar_mode(ta, LV_SCROLLBAR_MODE_OFF);
+    // Remembered so the keyboard comes up in the right mode for this field.
+    lv_obj_set_user_data(ta, (void *)(uintptr_t)(numeric ? 1 : 0));
+}
+
 // A labelled single-line text field. `password` masks it.
 static lv_obj_t *field_row(lv_obj_t *parent, const char *label, const char *value,
                            int max_len, bool password, bool numeric)
@@ -129,11 +154,8 @@ static lv_obj_t *field_row(lv_obj_t *parent, const char *label, const char *valu
     lv_textarea_set_max_length(ta, max_len);
     lv_textarea_set_password_mode(ta, password);
     lv_textarea_set_text(ta, value ? value : "");
-    lv_obj_set_style_text_font(ta, &Sf_Compact_14, 0);
-    lv_obj_set_height(ta, 32);
     lv_obj_set_flex_grow(ta, 1);
-    // Remembered so the keyboard comes up in the right mode for this field.
-    lv_obj_set_user_data(ta, (void *)(uintptr_t)(numeric ? 1 : 0));
+    admin_ta_init(ta, numeric);
     return ta;
 }
 
@@ -285,6 +307,11 @@ static void keyboard_hide(void)
     lv_keyboard_set_textarea(s_keyboard, NULL);
     lv_obj_set_height(s_panel, 300);
     lv_obj_align(s_panel, LV_ALIGN_CENTER, 0, 0);
+    // Back at full height everything fits, so drop any scroll offset left over
+    // from making room for the keyboard -- otherwise the panel stays scrolled
+    // with blank space at the bottom.
+    lv_obj_update_layout(s_panel);
+    lv_obj_scroll_to_y(s_panel, 0, LV_ANIM_OFF);
 }
 
 static void keyboard_event_cb(lv_event_t *e)
@@ -301,6 +328,7 @@ static void ta_event_cb(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
 
     if (code == LV_EVENT_FOCUSED || code == LV_EVENT_CLICKED) {
+        lv_obj_set_style_opa(ta, LV_OPA_COVER, LV_PART_CURSOR);
         bool numeric = (uintptr_t)lv_obj_get_user_data(ta) != 0;
         lv_keyboard_set_mode(s_keyboard, numeric ? LV_KEYBOARD_MODE_NUMBER
                                                  : LV_KEYBOARD_MODE_TEXT_LOWER);
@@ -310,8 +338,24 @@ static void ta_event_cb(lv_event_t *e)
         // still visible on a 320 px-tall screen.
         lv_obj_set_height(s_panel, 320 - ADMIN_KB_HEIGHT - 12);
         lv_obj_align(s_panel, LV_ALIGN_TOP_MID, 0, 6);
-        lv_obj_scroll_to_view(ta, LV_ANIM_OFF);
+        // The resize above only marks the layout dirty; LVGL recalculates it
+        // at the next refresh, so force it before measuring anything.
+        lv_obj_update_layout(s_panel);
+        // Then put the field's whole row at the top of what is left of the
+        // panel. lv_obj_scroll_to_view() was not enough here: it stops as soon
+        // as the target is nominally inside the viewport, which left the row
+        // flush against the bottom edge and half under the keyboard. Working
+        // in absolute coordinates and scrolling by the delta is unambiguous
+        // about what ends up where.
+        lv_area_t row_area, view;
+        lv_obj_get_coords(lv_obj_get_parent(ta), &row_area);
+        lv_obj_get_content_coords(s_panel, &view);
+        int32_t delta = row_area.y1 - view.y1;
+        if (delta != 0) {
+            lv_obj_scroll_by(s_panel, 0, -delta, LV_ANIM_OFF);
+        }
     } else if (code == LV_EVENT_DEFOCUSED) {
+        lv_obj_set_style_opa(ta, LV_OPA_TRANSP, LV_PART_CURSOR);
         keyboard_hide();
     }
 }
@@ -430,10 +474,13 @@ static void refresh_cb(lv_timer_t *t)
     uint16_t port = 0;
     cms_link_get_endpoint(host, sizeof(host), &port);
 
+    // Kept short enough that the longest realistic line still fits the panel
+    // width: the label clips rather than wrapping, so anything longer would be
+    // cut off instead of reflowing.
     lv_label_set_text_fmt(s_status_label,
-                          "WiFi: %s   IP: %s   Сигнал: %d dBm\n"
-                          "CMS: %s  (%s:%u)\n"
-                          "Верзија: %s   Уред: %s",
+                          "WiFi: %s  %s  %d dBm\n"
+                          "CMS: %s  %s:%u\n"
+                          "v%s  %s",
                           net_state_name(net_state()), ip, rssi,
                           cms_link_connected() ? (cms_link_up() ? "поврзан" : "без одговор")
                                                : "без врска",
@@ -493,6 +540,11 @@ static void panel_build(void)
     lv_obj_set_style_text_font(s_status_label, &Sf_Compact_14, 0);
     lv_obj_set_style_text_color(s_status_label, UI_COL_TEXT, 0);
     lv_obj_set_width(s_status_label, LV_PCT(100));
+    // CLIP, not the default WRAP. This text is rewritten once a second and its
+    // line widths vary (UP vs CONNECTING, IP length, RSSI digits). Wrapping
+    // would turn three lines into four whenever one grew, reflowing the flex
+    // column and making every field below it jump once a second.
+    lv_label_set_long_mode(s_status_label, LV_LABEL_LONG_CLIP);
     lv_label_set_text(s_status_label, "");
 
     lv_obj_t *ap_row = lv_obj_create(s_panel);
@@ -507,10 +559,11 @@ static void panel_build(void)
     s_ap_dropdown = lv_dropdown_create(ap_row);
     lv_dropdown_set_options(s_ap_dropdown, "Притиснете Скенирај");
     lv_obj_set_style_text_font(s_ap_dropdown, &Sf_Compact_14, 0);
-    lv_obj_set_height(s_ap_dropdown, 32);
+    lv_obj_set_style_pad_ver(s_ap_dropdown, 4, 0);
+    lv_obj_set_height(s_ap_dropdown, LV_SIZE_CONTENT);
     lv_obj_set_flex_grow(s_ap_dropdown, 1);
     lv_obj_add_event_cb(s_ap_dropdown, ap_pick_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    admin_button(ap_row, "Скенирај", false, scan_cb, NULL, 100, 32);
+    admin_button(ap_row, "Скенирај", false, scan_cb, NULL, 0, 34);
 
     // The SSID stays a text field even with the scan list above it, so a
     // hidden network can be typed in — the scan only fills this in.
@@ -533,9 +586,8 @@ static void panel_build(void)
     lv_textarea_set_one_line(s_port_ta, true);
     lv_textarea_set_max_length(s_port_ta, 5);
     lv_textarea_set_text(s_port_ta, port);
-    lv_obj_set_style_text_font(s_port_ta, &Sf_Compact_14, 0);
-    lv_obj_set_size(s_port_ta, 78, 32);
-    lv_obj_set_user_data(s_port_ta, (void *)(uintptr_t)1); // numeric keyboard
+    lv_obj_set_width(s_port_ta, 78);
+    admin_ta_init(s_port_ta, true);
 
     lv_obj_t *tas[] = { s_ssid_ta, s_pass_ta, s_host_ta, s_port_ta };
     for (size_t i = 0; i < sizeof(tas) / sizeof(tas[0]); i++) {
