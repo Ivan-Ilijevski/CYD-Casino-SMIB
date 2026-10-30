@@ -153,6 +153,12 @@ static lv_obj_t *field_row(lv_obj_t *parent, const char *label, const char *valu
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_max_length(ta, max_len);
     lv_textarea_set_password_mode(ta, password);
+    if (password) {
+        // LVGL masks with U+2022 BULLET by default, which Sf_Compact_14 does
+        // not have (--range 32-127,1024-1119), so the field drew a row of tofu
+        // boxes. An ASCII asterisk is in range.
+        lv_textarea_set_password_bullet(ta, "*");
+    }
     lv_textarea_set_text(ta, value ? value : "");
     lv_obj_set_flex_grow(ta, 1);
     admin_ta_init(ta, numeric);
@@ -559,6 +565,10 @@ static void panel_build(void)
     s_ap_dropdown = lv_dropdown_create(ap_row);
     lv_dropdown_set_options(s_ap_dropdown, "Притиснете Скенирај");
     lv_obj_set_style_text_font(s_ap_dropdown, &Sf_Compact_14, 0);
+    // The open/close arrow is an LV_SYMBOL glyph, which Sf_Compact_14 lacks --
+    // it was drawing as a tofu box. The symbol is a separate part, so only it
+    // moves to Montserrat; the SSID list keeps the Cyrillic-capable face.
+    lv_obj_set_style_text_font(s_ap_dropdown, &lv_font_montserrat_14, LV_PART_INDICATOR);
     lv_obj_set_style_pad_ver(s_ap_dropdown, 4, 0);
     lv_obj_set_height(s_ap_dropdown, LV_SIZE_CONTENT);
     lv_obj_set_flex_grow(s_ap_dropdown, 1);

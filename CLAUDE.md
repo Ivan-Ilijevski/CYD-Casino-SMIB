@@ -86,6 +86,21 @@ cmake -S sim -B sim/build && cmake --build sim/build -j        # desktop sim
   stays administrable and shows a banner; the passcode is the real boundary.
   Don't "fix" this into failing shut — that bricks admin access short of a
   reflash.
+- **`Sf_Compact_14` only covers ASCII + Cyrillic** (generated with
+  `--range 32-127,1024-1119`). It is the theme's default font, so anything
+  outside those ranges draws as a tofu box. That includes glyphs **LVGL
+  supplies itself**, not just strings in this repo:
+  - `lv_keyboard` — its backspace/enter/OK keys are `LV_SYMBOL_*`; give the
+    whole widget `lv_font_montserrat_14`.
+  - `lv_dropdown` — its arrow is `LV_SYMBOL_DOWN`; put Montserrat on
+    `LV_PART_INDICATOR` only, so the list keeps Cyrillic.
+  - `lv_textarea` password mode — masks with U+2022 BULLET; call
+    `lv_textarea_set_password_bullet(ta, "*")`.
+  - Any `LV_SYMBOL_*` in a label (see the order badge in `ui_main.c`).
+
+  In this repo's own strings use ASCII `...`, never `…` (U+2026). A quick
+  audit: flag characters in a UI file that are neither `< 128` nor in
+  `0x400-0x45F`.
 - **Display flush**: signal `lv_display_flush_ready` from the panel IO's
   trans-done callback, not right after `draw_bitmap`. Signalling early tears the image.
 - **ES3C35P specifics**:
